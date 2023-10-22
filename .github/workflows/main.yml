@@ -26,6 +26,9 @@ jobs:
           profile: minimal
           override: true
 
+      - name: Pull submodules
+        run: git submodule update --init --recursive
+
       # selecting a toolchain should happen before the plugin, as the cache uses the current rustc version as its cache key
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
