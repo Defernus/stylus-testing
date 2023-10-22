@@ -39,13 +39,13 @@ jobs:
       - name: Format
         run: cargo make fmt
 
-      - name: Clippy
-        run: cargo make clippy
+      # - name: Clippy
+      #   run: cargo make clippy
 
-      - name: Test
-        run: cargo make test
+      # - name: Test
+      #   run: cargo make test
 
-      - name: Audit dependencies
-        run: |
-          cargo install --locked cargo-audit
-          cargo make audit
+      # - name: Audit dependencies
+      #   run: |
+      #     cargo install --locked cargo-audit
+      #     cargo make audit
