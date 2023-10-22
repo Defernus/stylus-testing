@@ -16,6 +16,7 @@ envconfig = "0.10.0"
 dotenvy = "0.15.7"
 hex = "0.4.3"
 ethers = "2.0.10"
+ethers-contract = "2.0.10"
 ethers-providers = "2.0.10"
 stylus-sdk = { version = "0.4.1", features = ["debug"] }
 serde = { version = "1.0.189", features = ["derive"] }

@@ -3,13 +3,15 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use ethers::types::U256;
+use ethers::types::{Address, U256};
 use stylus_sdk::keccak_const::Keccak256;
 use thiserror::Error as ThisError;
 use wasmer::{
     imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView, Module,
     RuntimeError, Store, Value,
 };
+
+use crate::provider::FromContractResult;
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
@@ -26,16 +28,19 @@ pub struct Env {
     entrypoint_data: Arc<Mutex<Vec<u8>>>,
     value: Arc<Mutex<U256>>,
     storage_bytes32: Arc<Mutex<HashMap<U256, U256>>>,
-    result: Arc<Mutex<String>>,
+    result: Arc<Mutex<Vec<u8>>>,
+    sender: Arc<Mutex<Address>>,
+    block_number: Arc<Mutex<u64>>,
+    transactions_count: Arc<Mutex<u64>>,
 }
 
 pub type ContractCallResult<T> = Result<T, ContractCallError>;
 
 #[derive(Debug)]
 pub struct ContractState {
-    pub env: FunctionEnv<Env>,
-    pub store: Store,
-    pub instance: Instance,
+    env: FunctionEnv<Env>,
+    store: Store,
+    instance: Instance,
 }
 
 impl ContractState {
@@ -51,11 +56,14 @@ impl ContractState {
             &mut store,
             Env {
                 value,
+                block_number: Arc::new(Mutex::new(0)),
                 reentrant_counter: shared_counter.clone(),
                 entrypoint_data: Arc::new(Mutex::new(Vec::new())),
                 storage_bytes32: Arc::new(Mutex::new(HashMap::new())),
-                result: Arc::new(Mutex::new(String::new())),
+                result: Arc::new(Mutex::new(Vec::new())),
+                sender: Arc::new(Mutex::new(Address::zero())),
                 memory: None,
+                transactions_count: Arc::new(Mutex::new(0)),
             },
         );
 
@@ -97,14 +105,20 @@ impl ContractState {
         *value = new_value;
     }
 
-    pub fn entry_point(&mut self, data_ptr: &[u8]) -> ContractCallResult<String> {
+    pub fn set_sender(&mut self, new_sender: Address) {
+        let mut sender = self.env.as_mut(&mut self.store).sender.lock().unwrap();
+
+        *sender = new_sender;
+    }
+
+    pub fn entry_point<T: FromContractResult>(&mut self, data_ptr: &[u8]) -> ContractCallResult<T> {
         let data_len = data_ptr.len() as i32;
 
         {
             let env = self.env.as_mut(&mut self.store);
 
             env.entrypoint_data = Arc::new(Mutex::new(data_ptr.to_vec()));
-            env.result = Arc::new(Mutex::new(String::new()));
+            env.result = Arc::new(Mutex::new(Vec::new()));
         }
 
         let entrypoint = self
@@ -118,7 +132,7 @@ impl ContractState {
         let results = result.to_vec();
         let result = results[0].i32().unwrap();
 
-        let result_str = self
+        let result_data = self
             .env
             .as_mut(&mut self.store)
             .result
@@ -126,11 +140,13 @@ impl ContractState {
             .unwrap()
             .clone();
 
-        if result == 0 {
-            return Err(ContractCallError::Message(result_str));
+        if result != 0 {
+            return Err(ContractCallError::Message(
+                String::from_utf8(result_data).unwrap(),
+            ));
         }
 
-        Ok(result_str)
+        Ok(FromContractResult::from_contract_result(&result_data))
     }
 
     pub fn read_mem(&self, ptr: u64, len: usize) -> Vec<u8> {
@@ -148,6 +164,34 @@ impl ContractState {
         view.read(ptr, &mut data).unwrap();
 
         data
+    }
+
+    pub fn env(&self) -> &Env {
+        self.env.as_ref(&self.store)
+    }
+
+    pub fn block_number(&self) -> u64 {
+        let block_number = self
+            .env
+            .as_ref(&self.store)
+            .block_number
+            .lock()
+            .unwrap()
+            .clone();
+
+        block_number
+    }
+
+    pub fn transactions_count(&self) -> u64 {
+        let transactions_count = self
+            .env
+            .as_ref(&self.store)
+            .transactions_count
+            .lock()
+            .unwrap()
+            .clone();
+
+        transactions_count
     }
 }
 
@@ -221,9 +265,10 @@ pub fn write_result(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
     let memory = env.memory.as_mut().unwrap();
     let view = memory.view(&store);
 
-    let result = read_str(&view, data_ptr, len);
+    let result = read_bytes(&view, data_ptr, len);
 
-    println!("call from wasm: write_result({result})");
+    println!("call from wasm: write_result({data_ptr}, {len})");
+    println!("\t└ result: 0x{}", hex::encode(&result));
 
     let mut env_result = env.result.lock().unwrap();
     *env_result = result;
@@ -239,7 +284,11 @@ pub fn native_keccak256(mut env: FunctionEnvMut<Env>, bytes: u32, len: u32, outp
     println!("call from wasm: native_keccak256({data:?}, {output_ptr})");
 
     let output = Keccak256::new().update(&data).finalize();
-    println!("\t└ output: 0x{}", hex::encode(&output));
+    println!(
+        "\t└ output: 0x{} ({})",
+        hex::encode(&output),
+        U256::from_big_endian(&output)
+    );
 
     write_bytes(&view, output_ptr as u64, &output);
 }
@@ -266,8 +315,21 @@ pub fn memory_grow(mut _env: FunctionEnvMut<Env>, pages: u32) {
     println!("call from wasm: memory_grow({pages})");
 }
 
-pub fn msg_sender(mut _env: FunctionEnvMut<Env>, sender: u32) {
-    println!("call from wasm: msg_sender({sender})");
+pub fn msg_sender(mut env: FunctionEnvMut<Env>, sender_ptr: u32) {
+    println!("call from wasm: msg_sender({sender_ptr})");
+
+    let (env, store) = env.data_and_store_mut();
+
+    let memory = env.memory.as_mut().unwrap();
+
+    let view = memory.view(&store);
+
+    let sender = env.sender.lock().unwrap().clone();
+    println!("\t└ sender: {}", sender);
+
+    let bytes: [u8; 20] = sender.into();
+
+    view.write(sender_ptr as u64, &bytes).unwrap();
 }
 
 pub fn log_txt(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {

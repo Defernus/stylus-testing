@@ -13,6 +13,7 @@ rand = { workspace = true }
 envconfig = { workspace = true }
 dotenvy = { workspace = true }
 ethers = { workspace = true }
+ethers-contract = { workspace = true }
 ethers-providers = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

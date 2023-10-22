@@ -4,14 +4,20 @@ use std::{
 };
 
 use async_trait::async_trait;
-use ethers::{providers::Provider, types::Address};
+use ethers::{
+    middleware::SignerMiddleware,
+    providers::Provider,
+    signers::LocalWallet,
+    types::{Address, Block, FeeHistory, Transaction, H256, U256, U64},
+};
 use ethers_providers::{JsonRpcClient, JsonRpcError, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
-use crate::contract::ContractState;
+use crate::contract::{ContractCallError, ContractState};
 
 pub type TestProvider = Provider<TestInnerProvider>;
+pub type TestClient = SignerMiddleware<TestProvider, LocalWallet>;
 
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
@@ -42,6 +48,9 @@ pub enum ClientError {
         /// The contents of the HTTP response that could not be deserialized
         text: String,
     },
+
+    #[error("Contract call error: {0}")]
+    ContractCallError(#[from] ContractCallError),
 }
 
 impl From<ClientError> for ProviderError {
@@ -87,19 +96,21 @@ impl JsonRpcClient for TestInnerProvider {
                 let params = serde_json::to_string(&params).unwrap();
                 println!("raw_params: {}", params);
 
-                let params = serde_json::from_str::<(RequestParams, String)>(&params).unwrap();
+                let params = serde_json::from_str::<(EthCallParams, String)>(&params).unwrap();
 
                 let data = hex::decode(&params.0.data[2..]).unwrap();
 
                 let mut contract = self.contract.lock().unwrap();
 
-                let res = contract.entry_point(&data).unwrap();
+                let res: String = contract.entry_point(&data)?;
+                let res = hex::encode(res);
 
-                println!("res: {:?}", res);
+                let res = serde_json::to_string::<String>(&res).unwrap();
 
-                let v = serde_json::from_str("\"\"").unwrap();
+                println!("R type: {}", std::any::type_name::<R>());
+                println!("res: {}", res);
 
-                return Ok(v);
+                return Ok(serde_json::from_str(&res).unwrap());
             }
             method => unimplemented!("Method \"{method}\""),
         };
@@ -107,7 +118,7 @@ impl JsonRpcClient for TestInnerProvider {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RequestParams {
+pub struct EthCallParams {
     // [{"accessList":[],"data":"...","from":"0x3cc222811060826c2699ea8ff9b35fdb0963d6ad","to":"0x00000000000000000000000000000000000004d2","type":"0x02"},"latest"]
     #[serde(rename = "accessList")]
     access_list: Vec<()>,
@@ -116,4 +127,37 @@ pub struct RequestParams {
     to: Address,
     #[serde(rename = "type")]
     tx_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasEstimateRequestParams {
+    // [{"accessList":[],"data":"...","from":"0x3cc222811060826c2699ea8ff9b35fdb0963d6ad","to":"0x00000000000000000000000000000000000004d2","type":"0x02"},"latest"]
+    #[serde(rename = "accessList")]
+    access_list: Vec<()>,
+    data: String,
+    from: Address,
+    to: Address,
+    #[serde(rename = "type")]
+    tx_type: String,
+    #[serde(rename = "maxFeePerGas")]
+    max_fee_per_gas: U64,
+    #[serde(rename = "maxPriorityFeePerGas")]
+    max_priority_fee_per_gas: U64,
+    nonce: U256,
+}
+
+pub trait FromContractResult {
+    fn from_contract_result(result: &[u8]) -> Self;
+}
+
+impl FromContractResult for String {
+    fn from_contract_result(result: &[u8]) -> Self {
+        String::from_utf8(result.to_vec()).unwrap()
+    }
+}
+
+impl FromContractResult for U256 {
+    fn from_contract_result(result: &[u8]) -> Self {
+        U256::from_big_endian(result)
+    }
 }

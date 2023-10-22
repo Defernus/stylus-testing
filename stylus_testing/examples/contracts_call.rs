@@ -4,13 +4,14 @@ use ethers::{
     middleware::SignerMiddleware,
     prelude::abigen,
     signers::{LocalWallet, Signer},
-    types::Address,
+    types::{Address, U256},
 };
 
 use stylus_testing::{
     contract::ContractState,
     private_key::key_from_index,
     provider::{TestInnerProvider, TestProvider},
+    utils::contract_call_helper::send,
 };
 
 static CONTRACT_BYTES: &'static [u8] = include_bytes!("../../contracts/erc20.wasm");
@@ -39,13 +40,14 @@ abigen!(
 
 #[tokio::main]
 async fn main() {
-    let contract = ContractState::new(CONTRACT_BYTES);
-    let contract = Arc::new(Mutex::new(contract));
-
     let private_key = key_from_index(0);
     let wallet = LocalWallet::from_bytes(&private_key)
         .unwrap()
         .with_chain_id(4_u64);
+
+    let mut contract = ContractState::new(CONTRACT_BYTES);
+    contract.set_sender(wallet.address());
+    let contract = Arc::new(Mutex::new(contract));
 
     let test_provider = TestProvider::new(TestInnerProvider::new(contract));
 
@@ -53,31 +55,22 @@ async fn main() {
 
     let token = Erc20::new(Address::from_low_u64_be(1234), client.clone());
 
-    let result = token
+    println!("=== init ===");
+    token
         .init(wallet.address(), "Bitcoin".into(), "BTC".into(), 8)
         .await
         .unwrap();
 
-    println!("result: {:?}", result);
+    println!("=== set_minter ===");
+    token.set_minter(wallet.address(), true).await.unwrap();
 
-    let result = token
-        .init(wallet.address(), "Bitcoin".into(), "BTC".into(), 8)
-        .await
-        .unwrap();
+    println!("=== mint ===");
+    token.mint(wallet.address(), U256::from(3)).await.unwrap();
 
-    println!("result: {:?}", result);
+    println!("=== balance_of ===");
+    let balance = token.balance_of(wallet.address()).await.unwrap();
 
-    // contract.set_value(U256::from(12345));
+    assert_eq!(balance, U256::from(3));
 
-    // let data = hex::decode("3bf73798").unwrap();
-    // // selector.to_be_bytes();
-
-    // let res = contract.entry_point(&data);
-
-    // println!("res: {:?}", res);
-    // let res = res.unwrap();
-
-    // let data = contract.read_mem(res[0].i32().unwrap() as u64, 32);
-
-    // println!("data: {:?}", data);
+    println!("balance: {:?}", balance);
 }
