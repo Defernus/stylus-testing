@@ -40,26 +40,6 @@ abigen!(
     ]"#
 );
 
-// 0004d2","type":"0x02"},"latest"]
-// call from wasm: msg_reentrant()
-//         └ result: 0
-// call from wasm: read_args(130812)
-// call from wasm: msg_value(25600) -> 0
-// call from wasm: storage_load_bytes32(0, 24784)
-//         └ value: 0
-// call from wasm: storage_load_bytes32(1, 24656)
-//         └ value: 0
-// call from wasm: storage_load_bytes32(2, 24656)
-//         └ value: 0
-// call from wasm: storage_load_bytes32(3, 24912)
-//         └ value: 0
-// call from wasm: native_keccak256(25448, 64, 25128)
-// call from wasm: storage_store_bytes32(1, 30038970231641295373582720784850654067238680715539897351645650438096506847246)
-// call from wasm: storage_store_bytes32(0, 88798411917788436148661468515950041286013063965953)
-// call from wasm: storage_store_bytes32(3, 11)
-// call from wasm: storage_store_bytes32(2, 30001525576942200884098149691257528959455990793249145324804069187071678349318)
-// call from wasm: write_result(1, 0)
-
 #[tokio::test]
 async fn test_aaa() {
     let contract = Contract::new(CONTRACT_BYTES);
