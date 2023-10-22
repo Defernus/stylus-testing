@@ -21,6 +21,7 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 stylus-sdk = { workspace = true }
+tokio = { workspace = true }
 
 wasmer = { workspace = true }
 wasmer-vm = { workspace = true }

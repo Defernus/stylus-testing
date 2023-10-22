@@ -9,17 +9,17 @@ use ethers_providers::{JsonRpcClient, JsonRpcError, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
-use crate::contract::Contract;
+use crate::contract::ContractState;
 
 pub type TestProvider = Provider<TestInnerProvider>;
 
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
-    contract: Arc<Mutex<Contract>>,
+    contract: Arc<Mutex<ContractState>>,
 }
 
 impl TestInnerProvider {
-    pub fn new(contract: Arc<Mutex<Contract>>) -> Self {
+    pub fn new(contract: Arc<Mutex<ContractState>>) -> Self {
         Self { contract }
     }
 }

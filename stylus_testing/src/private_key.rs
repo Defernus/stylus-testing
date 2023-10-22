@@ -1,13 +1,14 @@
-use std::fs;
+use ethers::types::U256;
 
-pub fn key_from_file(path: &str) -> String {
-    println!("Reading key from {}", path);
-    println!(
-        "Current dir: {}",
-        std::env::current_dir().unwrap().display()
-    );
+const INDEX_OFFSET: usize = 1000;
 
-    let key = fs::read_to_string(path).unwrap();
+pub fn key_from_index(index: impl Into<U256>) -> Vec<u8> {
+    let mut result = vec![0; 32];
 
-    key.chars().filter(|c| !c.is_whitespace()).collect()
+    let index: U256 = index.into();
+    let offset: U256 = INDEX_OFFSET.into();
+
+    (index + offset).to_big_endian(&mut result);
+
+    result
 }

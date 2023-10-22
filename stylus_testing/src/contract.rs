@@ -5,10 +5,19 @@ use std::{
 
 use ethers::types::U256;
 use stylus_sdk::keccak_const::Keccak256;
+use thiserror::Error as ThisError;
 use wasmer::{
     imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView, Module,
     RuntimeError, Store, Value,
 };
+
+#[derive(Debug, ThisError, Clone)]
+pub enum ContractCallError {
+    #[error("Contract call error: {0}")]
+    Message(String),
+    #[error("Runtime error: {0}")]
+    RuntimeError(#[from] RuntimeError),
+}
 
 #[derive(Clone, Debug)]
 pub struct Env {
@@ -19,14 +28,17 @@ pub struct Env {
     storage_bytes32: Arc<Mutex<HashMap<U256, U256>>>,
     result: Arc<Mutex<String>>,
 }
+
+pub type ContractCallResult<T> = Result<T, ContractCallError>;
+
 #[derive(Debug)]
-pub struct Contract {
+pub struct ContractState {
     pub env: FunctionEnv<Env>,
     pub store: Store,
     pub instance: Instance,
 }
 
-impl Contract {
+impl ContractState {
     pub fn new(bytes: &[u8]) -> Self {
         let mut store = Store::default();
 
@@ -85,10 +97,15 @@ impl Contract {
         *value = new_value;
     }
 
-    pub fn entry_point(&mut self, data_ptr: &[u8]) -> Result<Box<[Value]>, RuntimeError> {
+    pub fn entry_point(&mut self, data_ptr: &[u8]) -> ContractCallResult<String> {
         let data_len = data_ptr.len() as i32;
 
-        self.env.as_mut(&mut self.store).entrypoint_data = Arc::new(Mutex::new(data_ptr.to_vec()));
+        {
+            let env = self.env.as_mut(&mut self.store);
+
+            env.entrypoint_data = Arc::new(Mutex::new(data_ptr.to_vec()));
+            env.result = Arc::new(Mutex::new(String::new()));
+        }
 
         let entrypoint = self
             .instance
@@ -96,7 +113,24 @@ impl Contract {
             .get_function("user_entrypoint")
             .unwrap();
 
-        entrypoint.call(&mut self.store, &[Value::I32(data_len)])
+        let result = entrypoint.call(&mut self.store, &[Value::I32(data_len)])?;
+
+        let results = result.to_vec();
+        let result = results[0].i32().unwrap();
+
+        let result_str = self
+            .env
+            .as_mut(&mut self.store)
+            .result
+            .lock()
+            .unwrap()
+            .clone();
+
+        if result == 0 {
+            return Err(ContractCallError::Message(result_str));
+        }
+
+        Ok(result_str)
     }
 
     pub fn read_mem(&self, ptr: u64, len: usize) -> Vec<u8> {
