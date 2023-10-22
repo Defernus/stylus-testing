@@ -1,0 +1,29 @@
+[package]
+name = "stylus-testing"
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+
+
+[dependencies]
+rand = { workspace = true }
+envconfig = { workspace = true }
+dotenvy = { workspace = true }
+ethers = { workspace = true }
+ethers-providers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+auto_impl = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+stylus-sdk = { workspace = true }
+
+wasmer = { workspace = true }
+wasmer-vm = { workspace = true }
+wasmer-types = { workspace = true }
+wasmer-compiler-singlepass = { workspace = true }
+wasmer-compiler-cranelift = { workspace = true }

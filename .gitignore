@@ -1,0 +1,10 @@
+/target
+/Cargo.lock
+/contracts
+/key
+
+node_modules
+
+.vscode
+.idea
+.env

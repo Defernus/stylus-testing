@@ -1,0 +1,61 @@
+[workspace]
+members = ["stylus_testing", "tests"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Denis Lavrentev"]
+license = "Apache-2.0-or-MIT"
+edition = "2021"
+repository = "https://github.com/defernus/rust-workspace-preset"
+keywords = ["boilerplate", "workspace", "example", "preset"]
+
+[workspace.dependencies]
+rand = "0.8.5"
+envconfig = "0.10.0"
+dotenvy = "0.15.7"
+hex = "0.4.3"
+ethers = "2.0.10"
+ethers-providers = "2.0.10"
+stylus-sdk = { version = "0.4.1", features = ["debug"] }
+serde = { version = "1.0.189", features = ["derive"] }
+serde_json = "1.0.107"
+auto_impl = "1.1.0"
+async-trait = "0.1.74"
+thiserror = "1.0.50"
+tokio = { version = "1.33.0", features = ["full"] }
+
+wasmer = { path = "./wasmer/lib/api/" }
+wasmer-vm = { path = "./wasmer/lib/vm/" }
+wasmer-types = { path = "./wasmer/lib/types/" }
+wasmer-compiler-singlepass = { path = "./wasmer/lib/compiler-singlepass", default-features = false, features = [
+    "std",
+    "unwind",
+    "avx",
+] }
+wasmer-compiler-cranelift = { path = "./wasmer/lib/compiler-cranelift" }
+wasmer-compiler-llvm = { path = "./wasmer/lib/compiler-llvm" }
+
+# project packages
+stylus-testing = { version = "0.1.0", path = "./stylus_testing" }
+tests = { version = "0.1.0", path = "./tests" }
+
+[profile.release]
+codegen-units = 1
+debug = false
+debug-assertions = false
+incremental = false
+lto = true
+overflow-checks = true
+opt-level = 3
+panic = "abort"
+rpath = false
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[toolchain]
+channel = "nightly"

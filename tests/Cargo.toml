@@ -1,0 +1,16 @@
+[package]
+name = "tests"
+version = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+keywords = { workspace = true }
+
+[dependencies]
+stylus-testing = { workspace = true }
+hex = { workspace = true }
+ethers = { workspace = true }
+stylus-sdk = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
