@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Debug,
     sync::{Arc, Mutex},
 };
@@ -8,7 +9,7 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::Provider,
     signers::LocalWallet,
-    types::{Address, Block, FeeHistory, Transaction, H256, U256, U64},
+    types::{Address, U256, U64},
 };
 use ethers_providers::{JsonRpcClient, JsonRpcError, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -21,12 +22,14 @@ pub type TestClient = SignerMiddleware<TestProvider, LocalWallet>;
 
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
-    contract: Arc<Mutex<ContractState>>,
+    contracts: HashMap<Address, Arc<Mutex<ContractState>>>,
 }
 
 impl TestInnerProvider {
-    pub fn new(contract: Arc<Mutex<ContractState>>) -> Self {
-        Self { contract }
+    pub fn new() -> Self {
+        Self {
+            contracts: HashMap::new(),
+        }
     }
 }
 
@@ -99,8 +102,16 @@ impl JsonRpcClient for TestInnerProvider {
                 let params = serde_json::from_str::<(EthCallParams, String)>(&params).unwrap();
 
                 let data = hex::decode(&params.0.data[2..]).unwrap();
+                let contract_address = params.0.to;
+                let sender_address = params.0.from;
 
-                let mut contract = self.contract.lock().unwrap();
+                let contract = self
+                    .contracts
+                    .get(&contract_address)
+                    .expect(format!("Contract not found: {}", contract_address).as_str());
+                let mut contract = contract.lock().unwrap();
+
+                contract.set_sender(sender_address);
 
                 let res: String = contract.entry_point(&data)?;
                 let res = hex::encode(res);

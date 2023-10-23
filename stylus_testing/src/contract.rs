@@ -6,8 +6,8 @@ use std::{
 use ethers::types::{Address, U256};
 use thiserror::Error as ThisError;
 use wasmer::{
-    imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
-    Module, RuntimeError, Store, StoreMut, Value,
+    imports, AsStoreRef, Function, FunctionEnv, Instance, Memory, MemoryView, Module, RuntimeError,
+    Store, Value,
 };
 
 use crate::{provider::FromContractResult, vm_hooks};
