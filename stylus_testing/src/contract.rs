@@ -112,6 +112,10 @@ impl ContractCall {
                 "msg_sender" => Function::new_typed_with_env(&mut store, &env, vm_hooks::msg_sender),
                 "block_timestamp" => Function::new_typed_with_env(&mut store, &env, vm_hooks::block_timestamp),
                 "call_contract" => Function::new_typed_with_env(&mut store, &env, vm_hooks::call_contract),
+                "delegate_call_contract" => Function::new_typed_with_env(&mut store, &env, vm_hooks::delegate_call_contract),
+                "static_call_contract" => Function::new_typed_with_env(&mut store, &env, vm_hooks::static_call_contract),
+                "read_return_data" => Function::new_typed_with_env(&mut store, &env, vm_hooks::read_return_data),
+                "contract_address" => Function::new_typed_with_env(&mut store, &env, vm_hooks::contract_address),
             },
             "console" => {
                 "log_txt" => Function::new_typed_with_env(&mut store, &env, vm_hooks::log_txt),
@@ -185,6 +189,8 @@ impl ContractCall {
             .unwrap()
             .result
             .clone();
+
+        println!("{} -> result: {}", self.address(), result);
 
         if result != 0 {
             return Err(ContractCallError::Message(

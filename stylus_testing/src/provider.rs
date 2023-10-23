@@ -9,13 +9,16 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::Provider,
     signers::LocalWallet,
-    types::{Address, U256, U64},
+    types::{Address, Bytes, U256, U64},
 };
 use ethers_providers::{JsonRpcClient, JsonRpcError, Middleware, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
-use crate::contract::{ContractCall, ContractCallError, ContractState};
+use crate::{
+    constants::CHAIN_UD,
+    contract::{ContractCall, ContractCallError, ContractState},
+};
 
 pub type TestOuterProvider = Provider<TestInnerProvider>;
 pub type TestClient = SignerMiddleware<TestOuterProvider, LocalWallet>;
@@ -117,6 +120,62 @@ impl JsonRpcClient for TestInnerProvider {
 
                 println!("R type: {}", std::any::type_name::<R>());
                 println!("res: {}", res);
+
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_chainId" => {
+                let res = Bytes::from(CHAIN_UD.to_be_bytes());
+                println!("R type: {}", std::any::type_name::<R>());
+
+                let res = serde_json::to_string(&res).unwrap();
+
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_getTransactionCount" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                println!("R type: {}", std::any::type_name::<R>());
+
+                let transaction_count = U256::zero();
+
+                let res = serde_json::to_string(&transaction_count).unwrap();
+
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_gasPrice" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                println!("R type: {}", std::any::type_name::<R>());
+
+                let gas_price = U256::zero();
+
+                let res = serde_json::to_string(&gas_price).unwrap();
+
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_estimateGas" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                println!("R type: {}", std::any::type_name::<R>());
+
+                let gas = U256::zero();
+
+                let res = serde_json::to_string(&gas).unwrap();
+
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_sendRawTransaction" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                println!("R type: {}", std::any::type_name::<R>());
+
+                let gas = U256::zero();
+
+                let res = serde_json::to_string(&gas).unwrap();
 
                 return Ok(serde_json::from_str(&res).unwrap());
             }
