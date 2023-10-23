@@ -10,7 +10,10 @@ use wasmer::{
     Store, Value,
 };
 
-use crate::{provider::FromContractResult, vm_hooks};
+use crate::{
+    provider::{FromContractResult, TestInnerProvider},
+    vm_hooks,
+};
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
@@ -20,44 +23,76 @@ pub enum ContractCallError {
     RuntimeError(#[from] RuntimeError),
 }
 
+#[derive(Debug, Clone)]
+pub struct ContractState {
+    reentrant_counter: u32,
+    binary: Vec<u8>,
+    storage_bytes32: HashMap<U256, U256>,
+    result: Vec<u8>,
+    return_data: Vec<u8>,
+}
+
+impl ContractState {
+    pub fn new(binary: &[u8]) -> Self {
+        Self {
+            binary: binary.to_vec(),
+            reentrant_counter: 0,
+            storage_bytes32: HashMap::new(),
+            result: Vec::new(),
+            return_data: Vec::new(),
+        }
+    }
+
+    pub fn reset_result(&mut self) {
+        self.result = Vec::new();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Env {
-    reentrant_counter: Arc<Mutex<u32>>,
+    state: Arc<Mutex<ContractState>>,
+    provider: TestInnerProvider,
+    value: U256,
+    entrypoint_data: Vec<u8>,
     memory: Option<Memory>,
-    entrypoint_data: Arc<Mutex<Vec<u8>>>,
-    value: Arc<Mutex<U256>>,
-    storage_bytes32: Arc<Mutex<HashMap<U256, U256>>>,
-    result: Arc<Mutex<Vec<u8>>>,
-    block_number: Arc<Mutex<u64>>,
     sender: Address,
     address: Address,
+    block_number: u64,
+    block_timestamp: u64,
 }
 
 pub type ContractCallResult<T> = Result<T, ContractCallError>;
 
 #[derive(Debug)]
-pub struct ContractState {
+pub struct ContractCall {
     env: FunctionEnv<Env>,
     store: Store,
     instance: Instance,
 }
 
-impl ContractState {
-    pub fn new(bytes: &[u8], address: Address) -> Self {
+impl ContractCall {
+    pub fn new(
+        provider: TestInnerProvider,
+        address: Address,
+        state: Arc<Mutex<ContractState>>,
+    ) -> Self {
         let mut store = Store::default();
+
+        let bytes = { state.lock().unwrap().binary.clone() };
 
         let module = Module::new(&store, bytes).unwrap();
 
         let env = FunctionEnv::new(
             &mut store,
             Env {
-                value: Arc::new(Mutex::new(U256::zero())),
-                block_number: Arc::new(Mutex::new(0)),
-                reentrant_counter: Arc::new(Mutex::new(0)),
-                entrypoint_data: Arc::new(Mutex::new(Vec::new())),
-                storage_bytes32: Arc::new(Mutex::new(HashMap::new())),
-                result: Arc::new(Mutex::new(Vec::new())),
+                state,
                 sender: Address::zero(),
+                value: U256::zero(),
+                // TODO set real block info
+                block_number: 0,
+                block_timestamp: 0,
+                entrypoint_data: Vec::new(),
+                provider,
                 address,
                 memory: None,
             },
@@ -75,6 +110,8 @@ impl ContractState {
                 "emit_log" => Function::new_typed_with_env(&mut store, &env, vm_hooks::emit_log),
                 "memory_grow" => Function::new_typed_with_env(&mut store, &env, vm_hooks::memory_grow),
                 "msg_sender" => Function::new_typed_with_env(&mut store, &env, vm_hooks::msg_sender),
+                "block_timestamp" => Function::new_typed_with_env(&mut store, &env, vm_hooks::block_timestamp),
+                "call_contract" => Function::new_typed_with_env(&mut store, &env, vm_hooks::call_contract),
             },
             "console" => {
                 "log_txt" => Function::new_typed_with_env(&mut store, &env, vm_hooks::log_txt),
@@ -99,24 +136,34 @@ impl ContractState {
         self.env.as_ref(&self.store).address
     }
 
-    pub fn set_value(&mut self, new_value: U256) {
-        let mut value = self.env.as_mut(&mut self.store).value.lock().unwrap();
+    pub fn with_value(mut self, value: U256) -> Self {
+        self.env.as_mut(&mut self.store).value = value;
 
-        *value = new_value;
+        self
     }
 
-    pub fn set_sender(&mut self, sender: Address) {
+    pub fn with_sender(mut self, sender: Address) -> Self {
         self.env.as_mut(&mut self.store).sender = sender;
+
+        self
     }
 
+    /// Call contract entry point and return result
     pub fn entry_point<T: FromContractResult>(&mut self, data_ptr: &[u8]) -> ContractCallResult<T> {
+        let result_data = self.entry_point_raw(data_ptr)?;
+
+        Ok(FromContractResult::from_contract_result(&result_data))
+    }
+
+    /// Call contract entry point and return raw result
+    pub fn entry_point_raw(&mut self, data_ptr: &[u8]) -> ContractCallResult<Vec<u8>> {
         let data_len = data_ptr.len() as i32;
 
         {
             let env = self.env.as_mut(&mut self.store);
 
-            env.entrypoint_data = Arc::new(Mutex::new(data_ptr.to_vec()));
-            env.result = Arc::new(Mutex::new(Vec::new()));
+            env.entrypoint_data = data_ptr.to_vec();
+            env.state.lock().unwrap().reset_result();
         }
 
         let entrypoint = self
@@ -133,9 +180,10 @@ impl ContractState {
         let result_data = self
             .env
             .as_mut(&mut self.store)
-            .result
+            .state
             .lock()
             .unwrap()
+            .result
             .clone();
 
         if result != 0 {
@@ -144,7 +192,7 @@ impl ContractState {
             ));
         }
 
-        Ok(FromContractResult::from_contract_result(&result_data))
+        Ok(result_data)
     }
 
     pub fn read_mem(&self, ptr: u64, len: usize) -> Vec<u8> {
@@ -169,15 +217,7 @@ impl ContractState {
     }
 
     pub fn block_number(&self) -> u64 {
-        let block_number = self
-            .env
-            .as_ref(&self.store)
-            .block_number
-            .lock()
-            .unwrap()
-            .clone();
-
-        block_number
+        self.env.as_ref(&self.store).block_number
     }
 }
 
@@ -194,62 +234,74 @@ impl Env {
         self.sender
     }
 
+    pub fn address(&self) -> Address {
+        self.address
+    }
+
+    pub fn provider(&self) -> TestInnerProvider {
+        self.provider.clone()
+    }
+
     pub fn value(&self) -> U256 {
-        let value = self.value.lock().unwrap().clone();
-
-        value
+        self.value
     }
 
-    pub fn set_value(&mut self, new_value: U256) {
-        let mut value = self.value.lock().unwrap();
-
-        *value = new_value;
+    pub fn set_value(&mut self, value: U256) {
+        self.value = value;
     }
 
-    pub fn set_result(&mut self, data: Vec<u8>) {
-        let mut result = self.result.lock().unwrap();
+    pub fn set_result(&mut self, result: Vec<u8>) {
+        let mut state = self.state.lock().unwrap();
 
-        *result = data;
+        state.result = result;
     }
 
     pub fn storage_bytes32_get(&self, key: U256) -> U256 {
-        let storage = self.storage_bytes32.lock().unwrap();
+        let storage = &self.state.lock().unwrap().storage_bytes32;
 
         storage.get(&key).cloned().unwrap_or_default()
     }
 
     pub fn storage_bytes32_insert(&mut self, key: U256, value: U256) {
-        let mut storage = self.storage_bytes32.lock().unwrap();
+        let mut storage = self.state.lock().unwrap();
 
-        storage.insert(key, value);
+        storage.storage_bytes32.insert(key, value);
+    }
+
+    pub fn return_data(&self) -> Vec<u8> {
+        self.state.lock().unwrap().return_data.clone()
+    }
+
+    pub fn set_return_data(&mut self, return_data: Vec<u8>) {
+        self.state.lock().unwrap().return_data = return_data;
     }
 
     pub fn entrypoint_data(&self) -> Vec<u8> {
-        let entrypoint_data = self.entrypoint_data.lock().unwrap();
-
-        entrypoint_data.clone()
+        self.entrypoint_data.clone()
     }
 
-    pub fn set_entrypoint_data(&mut self, data: Vec<u8>) {
-        let mut entrypoint_data = self.entrypoint_data.lock().unwrap();
+    pub fn block_timestamp(&self) -> u64 {
+        self.block_timestamp
+    }
 
-        *entrypoint_data = data;
+    pub fn set_entrypoint_data(&mut self, entrypoint_data: Vec<u8>) {
+        self.entrypoint_data = entrypoint_data;
     }
 
     pub fn reentrant_counter(&self) -> u32 {
-        self.reentrant_counter.lock().unwrap().clone()
+        self.state.lock().unwrap().reentrant_counter
     }
 
     pub fn inc_reentrant_counter(&mut self) {
-        let mut reentrant_counter = self.reentrant_counter.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
 
-        *reentrant_counter += 1;
+        state.reentrant_counter += 1;
     }
 
     pub fn reset_reentrant_counter(&mut self) {
-        let mut reentrant_counter = self.reentrant_counter.lock().unwrap();
+        let mut state = self.state.lock().unwrap();
 
-        *reentrant_counter = 0;
+        state.reentrant_counter = 0;
     }
 
     pub fn view(&self, store: &impl AsStoreRef) -> MemoryView {

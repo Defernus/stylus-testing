@@ -11,14 +11,14 @@ use ethers::{
     signers::LocalWallet,
     types::{Address, U256, U64},
 };
-use ethers_providers::{JsonRpcClient, JsonRpcError, ProviderError, RpcError};
+use ethers_providers::{JsonRpcClient, JsonRpcError, Middleware, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
-use crate::contract::{ContractCallError, ContractState};
+use crate::contract::{ContractCall, ContractCallError, ContractState};
 
-pub type TestProvider = Provider<TestInnerProvider>;
-pub type TestClient = SignerMiddleware<TestProvider, LocalWallet>;
+pub type TestOuterProvider = Provider<TestInnerProvider>;
+pub type TestClient = SignerMiddleware<TestOuterProvider, LocalWallet>;
 
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
@@ -105,9 +105,10 @@ impl JsonRpcClient for TestInnerProvider {
                 let contract_address = params.0.to;
                 let sender_address = params.0.from;
 
-                let contract = self.contract(contract_address);
-                let mut contract = contract.lock().unwrap();
-                contract.set_sender(sender_address);
+                let contract_state = self.contract(contract_address);
+                let mut contract =
+                    ContractCall::new(self.clone(), contract_address, contract_state)
+                        .with_sender(sender_address);
 
                 let res: String = contract.entry_point(&data)?;
                 let res = hex::encode(res);
@@ -127,22 +128,51 @@ impl JsonRpcClient for TestInnerProvider {
 impl TestInnerProvider {
     pub fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
         let contracts = self.contracts.lock().unwrap();
+
+        contracts
+            .get(&address)
+            .cloned()
+            .expect(format!("Contract not found: {}", address).as_str())
+    }
+}
+
+pub trait TestProvider {
+    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>>;
+
+    fn deploy_contract(&self, bytes: &[u8]) -> Address;
+}
+
+impl TestProvider for TestInnerProvider {
+    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+        let contracts = self.contracts.lock().unwrap();
+
         contracts
             .get(&address)
             .cloned()
             .expect(format!("Contract not found: {}", address).as_str())
     }
 
-    pub fn deploy_contract(&self, bytes: &[u8]) -> Address {
+    fn deploy_contract(&self, bytes: &[u8]) -> Address {
         let address = Address::random();
 
-        let contract = ContractState::new(bytes, address);
-        let contract = Arc::new(Mutex::new(contract));
+        let state = Arc::new(Mutex::new(ContractState::new(bytes)));
 
         let mut contracts = self.contracts.lock().unwrap();
-        contracts.insert(address, contract.clone());
+        contracts.insert(address, state.clone());
 
         address
+    }
+}
+
+impl TestProvider for Arc<TestClient> {
+    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.contract(address)
+    }
+
+    fn deploy_contract(&self, bytes: &[u8]) -> Address {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.deploy_contract(bytes)
     }
 }
 

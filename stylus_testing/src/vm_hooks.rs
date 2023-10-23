@@ -1,8 +1,8 @@
-use ethers::types::U256;
+use ethers::types::{Address, U256};
 use stylus_sdk::keccak_const::Keccak256;
 use wasmer::{FunctionEnvMut, MemoryView};
 
-use crate::contract::Env;
+use crate::contract::{ContractCall, ContractCallError, Env};
 
 /// Returns if current call is reentrant
 pub fn msg_reentrant(mut env: FunctionEnvMut<Env>) -> u32 {
@@ -116,6 +116,133 @@ pub fn msg_sender(mut env: FunctionEnvMut<Env>, sender_ptr: u32) {
     view.write(sender_ptr as u64, &bytes).unwrap();
 }
 
+pub fn block_timestamp(mut env: FunctionEnvMut<Env>) -> u64 {
+    println!("call from wasm: block_timestamp()");
+
+    let (env, _) = env.data_and_store_mut();
+
+    let block_timestamp = env.block_timestamp();
+
+    println!("\t└ block_timestamp: {block_timestamp}");
+
+    block_timestamp
+}
+
+pub fn call_contract(
+    mut env: FunctionEnvMut<Env>,
+    contract_ptr: u32,
+    calldata_ptr: u32,
+    calldata_len: u32,
+    value_ptr: u32,
+    _gas: u64,
+    return_data_len_ptr: u32,
+) -> u8 {
+    let (env, store) = env.data_and_store_mut();
+    let view = env.view(&store);
+
+    let contract_addr = read_addr(&view, contract_ptr as u64);
+
+    let data = read_bytes(&view, calldata_ptr, calldata_len);
+
+    let value = read_u256(&view, value_ptr as u64);
+
+    let str_data = hex::encode(&data);
+    println!("call from wasm: call_contract({contract_addr}, Ox{str_data}, {value})");
+
+    let provider = env.provider();
+
+    let contract_state = provider.contract(contract_addr);
+    let mut contract = ContractCall::new(provider, contract_addr, contract_state)
+        .with_value(value)
+        .with_sender(env.address());
+
+    let res = contract.entry_point_raw(&data);
+
+    let (status, data) = match res {
+        Ok(data) => (0, data),
+        Err(err) => {
+            println!("\t└ Error: {}", err);
+            (
+                1,
+                match err {
+                    ContractCallError::Message(data) => data.as_bytes().to_vec(),
+                    ContractCallError::RuntimeError(data) => panic!("RuntimeError: {}", data),
+                },
+            )
+        }
+    };
+
+    write_u64(&view, return_data_len_ptr as u64, data.len() as u64);
+
+    env.set_return_data(data);
+
+    status
+}
+
+pub fn delegate_call_contract(
+    mut env: FunctionEnvMut<Env>,
+    contract_ptr: u32,
+    calldata_ptr: u32,
+    calldata_len: u32,
+    _gas: u64,
+    return_data_len_ptr: u32,
+) -> u8 {
+    let (env, store) = env.data_and_store_mut();
+    let view = env.view(&store);
+
+    let contract_addr = read_addr(&view, contract_ptr as u64);
+
+    let data = read_bytes(&view, calldata_ptr, calldata_len);
+
+    let provider = env.provider();
+
+    let str_data = hex::encode(&data);
+    println!("call from wasm: call_contract({contract_addr}, Ox{str_data})");
+
+    let contract = provider.contract(contract_addr);
+    let mut contract =
+        ContractCall::new(provider, contract_addr, contract).with_sender(env.address());
+
+    let res = contract.entry_point_raw(&data);
+
+    let (status, data) = match res {
+        Ok(data) => (0, data),
+        Err(err) => {
+            println!("\t└ Error: {}", err);
+            (
+                1,
+                match err {
+                    ContractCallError::Message(data) => data.as_bytes().to_vec(),
+                    ContractCallError::RuntimeError(data) => panic!("RuntimeError: {}", data),
+                },
+            )
+        }
+    };
+
+    write_u64(&view, return_data_len_ptr as u64, data.len() as u64);
+
+    env.set_return_data(data);
+
+    status
+}
+
+pub fn read_return_data(
+    mut env: FunctionEnvMut<Env>,
+    dest: u32,
+    offset: usize,
+    size: usize,
+) -> usize {
+    let (env, store) = env.data_and_store_mut();
+
+    let view = env.view(&store);
+
+    let data = env.return_data();
+
+    write_bytes(&view, dest as u64, &data[offset..size]);
+
+    0
+}
+
 pub fn log_txt(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
     let (env, store) = env.data_and_store_mut();
     let view = env.view(&store);
@@ -157,4 +284,25 @@ fn write_u256(view: &MemoryView, ptr: u64, value: U256) {
 
 fn write_bytes(view: &MemoryView, ptr: u64, data: &[u8]) {
     view.write(ptr, data).unwrap();
+}
+
+fn read_addr(view: &MemoryView, ptr: u64) -> Address {
+    let mut data = vec![0; 20];
+    view.read(ptr, &mut data).unwrap();
+
+    Address::from_slice(&data)
+}
+
+#[allow(dead_code)]
+fn read_u64(view: &MemoryView, ptr: u64) -> u64 {
+    let mut data = vec![0; 8];
+    view.read(ptr, &mut data).unwrap();
+
+    u64::from_le_bytes(data.try_into().unwrap())
+}
+
+fn write_u64(view: &MemoryView, ptr: u64, value: u64) {
+    let data = value.to_le_bytes();
+
+    view.write(ptr, &data).unwrap();
 }

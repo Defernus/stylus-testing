@@ -1,17 +1,16 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ethers::{
     middleware::SignerMiddleware,
     prelude::abigen,
+    providers::Provider,
     signers::{LocalWallet, Signer},
-    types::{Address, U256},
+    types::U256,
 };
 
 use stylus_testing::{
-    contract::ContractState,
     private_key::key_from_index,
     provider::{TestInnerProvider, TestProvider},
-    utils::contract_call_helper::send,
 };
 
 static CONTRACT_BYTES: &'static [u8] = include_bytes!("../../contracts/erc20.wasm");
@@ -44,21 +43,13 @@ async fn main() {
     let wallet = LocalWallet::from_bytes(&private_key)
         .unwrap()
         .with_chain_id(4_u64);
-
-    let inner_provider = TestInnerProvider::new();
-    let contract_address = inner_provider.deploy_contract(CONTRACT_BYTES);
-    {
-        let contract = inner_provider.contract(contract_address);
-        let mut contract = contract.lock().unwrap();
-
-        contract.set_sender(wallet.address());
-    }
-
-    let test_provider = TestProvider::new(inner_provider);
+    let test_provider = Provider::new(TestInnerProvider::new());
 
     let client = Arc::new(SignerMiddleware::new(test_provider, wallet.clone()));
 
-    let token = Erc20::new(Address::from_low_u64_be(1234), client.clone());
+    let token_addr = client.deploy_contract(CONTRACT_BYTES);
+
+    let token = Erc20::new(token_addr, client.clone());
 
     println!("=== init ===");
     token
