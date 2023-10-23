@@ -175,7 +175,7 @@ pub fn call_contract(
         .with_value(value)
         .with_sender(env.address());
 
-    let res = contract.entry_point_raw(&data);
+    let res = contract.entry_point(&data);
 
     let (status, data) = match res {
         Ok(data) => (0, data),
@@ -222,7 +222,7 @@ pub fn delegate_call_contract(
     let mut contract =
         ContractCall::new(provider, contract_addr, contract).with_sender(env.address());
 
-    let res = contract.entry_point_raw(&data);
+    let res = contract.entry_point(&data);
 
     let (status, data) = match res {
         Ok(data) => (0, data),
@@ -269,7 +269,7 @@ pub fn static_call_contract(
     let mut contract =
         ContractCall::new(provider, contract_addr, contract).with_sender(env.address());
 
-    let res = contract.entry_point_raw(&data);
+    let res = contract.entry_point(&data);
 
     let (status, data) = match res {
         Ok(data) => (0, data),

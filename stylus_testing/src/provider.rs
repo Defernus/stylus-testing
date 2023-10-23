@@ -9,7 +9,10 @@ use ethers::{
     middleware::SignerMiddleware,
     providers::Provider,
     signers::LocalWallet,
-    types::{Address, Bytes, U256, U64},
+    types::{
+        Address, Bytes, NameOrAddress, Transaction, TransactionReceipt, TransactionRequest, H256,
+        U256, U64,
+    },
 };
 use ethers_providers::{JsonRpcClient, JsonRpcError, Middleware, ProviderError, RpcError};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -26,12 +29,18 @@ pub type TestClient = SignerMiddleware<TestOuterProvider, LocalWallet>;
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
     contracts: Arc<Mutex<HashMap<Address, Arc<Mutex<ContractState>>>>>,
+    balances: Arc<Mutex<HashMap<Address, U256>>>,
+    transactions: Arc<Mutex<HashMap<U256, Transaction>>>,
+    block_number: Arc<Mutex<u64>>,
 }
 
 impl TestInnerProvider {
     pub fn new() -> Self {
         Self {
-            contracts: Arc::new(Mutex::new(HashMap::new())),
+            contracts: Arc::default(),
+            balances: Arc::default(),
+            transactions: Arc::default(),
+            block_number: Arc::default(),
         }
     }
 }
@@ -95,7 +104,7 @@ impl JsonRpcClient for TestInnerProvider {
         method: &str,
         params: T,
     ) -> Result<R, ClientError> {
-        println!("method: {}", method);
+        println!("method: {} -> {}", method, std::any::type_name::<R>());
 
         match method {
             "eth_call" => {
@@ -113,19 +122,16 @@ impl JsonRpcClient for TestInnerProvider {
                     ContractCall::new(self.clone(), contract_address, contract_state)
                         .with_sender(sender_address);
 
-                let res: String = contract.entry_point(&data)?;
-                let res = hex::encode(res);
+                let res: Bytes = contract.entry_point(&data)?.into();
 
-                let res = serde_json::to_string::<String>(&res).unwrap();
+                let res = serde_json::to_string(&res).unwrap();
 
-                println!("R type: {}", std::any::type_name::<R>());
                 println!("res: {}", res);
 
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             "eth_chainId" => {
                 let res = Bytes::from(CHAIN_UD.to_be_bytes());
-                println!("R type: {}", std::any::type_name::<R>());
 
                 let res = serde_json::to_string(&res).unwrap();
 
@@ -134,8 +140,6 @@ impl JsonRpcClient for TestInnerProvider {
             "eth_getTransactionCount" => {
                 let params = serde_json::to_string(&params).unwrap();
                 println!("raw_params: {}", params);
-
-                println!("R type: {}", std::any::type_name::<R>());
 
                 let transaction_count = U256::zero();
 
@@ -147,8 +151,6 @@ impl JsonRpcClient for TestInnerProvider {
                 let params = serde_json::to_string(&params).unwrap();
                 println!("raw_params: {}", params);
 
-                println!("R type: {}", std::any::type_name::<R>());
-
                 let gas_price = U256::zero();
 
                 let res = serde_json::to_string(&gas_price).unwrap();
@@ -158,8 +160,6 @@ impl JsonRpcClient for TestInnerProvider {
             "eth_estimateGas" => {
                 let params = serde_json::to_string(&params).unwrap();
                 println!("raw_params: {}", params);
-
-                println!("R type: {}", std::any::type_name::<R>());
 
                 let gas = U256::zero();
 
@@ -171,12 +171,82 @@ impl JsonRpcClient for TestInnerProvider {
                 let params = serde_json::to_string(&params).unwrap();
                 println!("raw_params: {}", params);
 
-                println!("R type: {}", std::any::type_name::<R>());
+                let (tx_data,) = serde_json::from_str::<(Bytes,)>(&params).unwrap();
 
-                let gas = U256::zero();
+                let data = rlp::Rlp::new(tx_data.as_ref());
 
-                let res = serde_json::to_string(&gas).unwrap();
+                let tx = TransactionRequest::decode_unsigned_rlp(&data).unwrap();
+                println!("tx: {:?}", tx);
 
+                if tx.data.is_some() {
+                    unimplemented!("Data is not supported yet {tx:?}");
+                }
+
+                let to = tx.to.clone().map(|v| match v {
+                    NameOrAddress::Address(address) => address,
+                    _ => unimplemented!("Name not implemented yet {:?}", tx),
+                });
+
+                if let Some(value) = tx.value {
+                    match (tx.from, to) {
+                        (Some(from), Some(to)) => {
+                            self.send_eth(from, to, value);
+                        }
+                        (None, Some(to)) => {
+                            self.mint_eth(to, value);
+                        }
+                        _ => unimplemented!("Unknown {:?}", tx),
+                    };
+                }
+
+                let tx_hash = rand::random::<[u8; 32]>();
+                let tx_hash = U256::from_big_endian(&tx_hash);
+
+                {
+                    let mut transactions = self.transactions.lock().unwrap();
+
+                    let mut hash_data = vec![0u8; 32];
+                    tx_hash.to_big_endian(&mut hash_data);
+
+                    let mut result_tx = Transaction::default();
+                    result_tx.hash = H256::from_slice(&hash_data);
+                    result_tx.from = tx.from.unwrap_or_default();
+                    result_tx.value = tx.value.unwrap_or_default();
+                    result_tx.to = to;
+                    result_tx.block_number = Some(self.block_number());
+
+                    transactions.insert(tx_hash, result_tx);
+                }
+
+                let res = serde_json::to_string(&tx_hash).unwrap();
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_getTransactionByHash" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                let (tx_hash,) = serde_json::from_str::<(U256,)>(&params).unwrap();
+
+                let tx = self.transactions.lock().unwrap().get(&tx_hash).cloned();
+
+                let res = serde_json::to_string(&tx).unwrap();
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_getTransactionReceipt" => {
+                let params = serde_json::to_string(&params).unwrap();
+                println!("raw_params: {}", params);
+
+                let (tx_hash,) = serde_json::from_str::<(U256,)>(&params).unwrap();
+
+                let mut hash_data = vec![0u8; 32];
+                tx_hash.to_big_endian(&mut hash_data);
+
+                let mut res = TransactionReceipt::default();
+
+                res.transaction_hash = H256::from_slice(&hash_data);
+                res.block_number = Some(self.block_number());
+
+                let res = serde_json::to_string(&res).unwrap();
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             method => unimplemented!("Method \"{method}\""),
@@ -192,6 +262,47 @@ impl TestInnerProvider {
             .get(&address)
             .cloned()
             .expect(format!("Contract not found: {}", address).as_str())
+    }
+
+    pub fn block_number(&self) -> U64 {
+        let block_number = self.block_number.lock().unwrap();
+
+        U64::from(*block_number)
+    }
+
+    pub fn next_block(&self) {
+        let mut block_number = self.block_number.lock().unwrap();
+
+        *block_number += 1;
+    }
+
+    pub fn mint_eth(&self, to: Address, amount: U256) {
+        let mut balances = self.balances.lock().unwrap();
+
+        let balance = balances.entry(to).or_insert(U256::zero());
+        *balance += amount;
+    }
+
+    // TODO add error handling
+    pub fn send_eth(&self, from: Address, to: Address, amount: U256) {
+        let mut balances = self.balances.lock().unwrap();
+
+        let from_balance = balances.entry(from).or_insert(U256::zero());
+
+        if *from_balance < amount {
+            panic!("Insufficient funds");
+        }
+
+        *from_balance -= amount;
+
+        let to_balance = balances.entry(to).or_insert(U256::zero());
+        *to_balance += amount;
+    }
+
+    pub fn balance(&self, address: Address) -> U256 {
+        let balances = self.balances.lock().unwrap();
+
+        balances.get(&address).cloned().unwrap_or_default()
     }
 }
 
@@ -270,7 +381,8 @@ pub trait FromContractResult {
 
 impl FromContractResult for String {
     fn from_contract_result(result: &[u8]) -> Self {
-        String::from_utf8(result.to_vec()).unwrap()
+        // String::from_utf8(result.to_vec()).unwrap_or_else(|_| format!("0x{}", hex::encode(result)))
+        format!("{}", hex::encode(result))
     }
 }
 

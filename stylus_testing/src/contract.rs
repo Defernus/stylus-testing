@@ -10,10 +10,7 @@ use wasmer::{
     Store, Value,
 };
 
-use crate::{
-    provider::{FromContractResult, TestInnerProvider},
-    vm_hooks,
-};
+use crate::{provider::TestInnerProvider, vm_hooks};
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
@@ -152,15 +149,8 @@ impl ContractCall {
         self
     }
 
-    /// Call contract entry point and return result
-    pub fn entry_point<T: FromContractResult>(&mut self, data_ptr: &[u8]) -> ContractCallResult<T> {
-        let result_data = self.entry_point_raw(data_ptr)?;
-
-        Ok(FromContractResult::from_contract_result(&result_data))
-    }
-
     /// Call contract entry point and return raw result
-    pub fn entry_point_raw(&mut self, data_ptr: &[u8]) -> ContractCallResult<Vec<u8>> {
+    pub fn entry_point(&mut self, data_ptr: &[u8]) -> ContractCallResult<Vec<u8>> {
         let data_len = data_ptr.len() as i32;
 
         {
