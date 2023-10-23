@@ -28,9 +28,9 @@ pub struct Env {
     value: Arc<Mutex<U256>>,
     storage_bytes32: Arc<Mutex<HashMap<U256, U256>>>,
     result: Arc<Mutex<Vec<u8>>>,
-    sender: Arc<Mutex<Address>>,
     block_number: Arc<Mutex<u64>>,
-    transactions_count: Arc<Mutex<u64>>,
+    sender: Address,
+    address: Address,
 }
 
 pub type ContractCallResult<T> = Result<T, ContractCallError>;
@@ -43,7 +43,7 @@ pub struct ContractState {
 }
 
 impl ContractState {
-    pub fn new(bytes: &[u8]) -> Self {
+    pub fn new(bytes: &[u8], address: Address) -> Self {
         let mut store = Store::default();
 
         let module = Module::new(&store, bytes).unwrap();
@@ -57,9 +57,9 @@ impl ContractState {
                 entrypoint_data: Arc::new(Mutex::new(Vec::new())),
                 storage_bytes32: Arc::new(Mutex::new(HashMap::new())),
                 result: Arc::new(Mutex::new(Vec::new())),
-                sender: Arc::new(Mutex::new(Address::zero())),
+                sender: Address::zero(),
+                address,
                 memory: None,
-                transactions_count: Arc::new(Mutex::new(0)),
             },
         );
 
@@ -95,16 +95,18 @@ impl ContractState {
         }
     }
 
+    pub fn address(&self) -> Address {
+        self.env.as_ref(&self.store).address
+    }
+
     pub fn set_value(&mut self, new_value: U256) {
         let mut value = self.env.as_mut(&mut self.store).value.lock().unwrap();
 
         *value = new_value;
     }
 
-    pub fn set_sender(&mut self, new_sender: Address) {
-        let mut sender = self.env.as_mut(&mut self.store).sender.lock().unwrap();
-
-        *sender = new_sender;
+    pub fn set_sender(&mut self, sender: Address) {
+        self.env.as_mut(&mut self.store).sender = sender;
     }
 
     pub fn entry_point<T: FromContractResult>(&mut self, data_ptr: &[u8]) -> ContractCallResult<T> {
@@ -177,18 +179,6 @@ impl ContractState {
 
         block_number
     }
-
-    pub fn transactions_count(&self) -> u64 {
-        let transactions_count = self
-            .env
-            .as_ref(&self.store)
-            .transactions_count
-            .lock()
-            .unwrap()
-            .clone();
-
-        transactions_count
-    }
 }
 
 impl Env {
@@ -201,15 +191,7 @@ impl Env {
     }
 
     pub fn sender(&self) -> Address {
-        let sender = self.sender.lock().unwrap().clone();
-
-        sender
-    }
-
-    pub fn set_sender(&mut self, new_sender: Address) {
-        let mut sender = self.sender.lock().unwrap();
-
-        *sender = new_sender;
+        self.sender
     }
 
     pub fn value(&self) -> U256 {

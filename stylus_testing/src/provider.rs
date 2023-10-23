@@ -22,13 +22,13 @@ pub type TestClient = SignerMiddleware<TestProvider, LocalWallet>;
 
 #[derive(Debug, Clone)]
 pub struct TestInnerProvider {
-    contracts: HashMap<Address, Arc<Mutex<ContractState>>>,
+    contracts: Arc<Mutex<HashMap<Address, Arc<Mutex<ContractState>>>>>,
 }
 
 impl TestInnerProvider {
     pub fn new() -> Self {
         Self {
-            contracts: HashMap::new(),
+            contracts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -105,12 +105,8 @@ impl JsonRpcClient for TestInnerProvider {
                 let contract_address = params.0.to;
                 let sender_address = params.0.from;
 
-                let contract = self
-                    .contracts
-                    .get(&contract_address)
-                    .expect(format!("Contract not found: {}", contract_address).as_str());
+                let contract = self.contract(contract_address);
                 let mut contract = contract.lock().unwrap();
-
                 contract.set_sender(sender_address);
 
                 let res: String = contract.entry_point(&data)?;
@@ -125,6 +121,28 @@ impl JsonRpcClient for TestInnerProvider {
             }
             method => unimplemented!("Method \"{method}\""),
         };
+    }
+}
+
+impl TestInnerProvider {
+    pub fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+        let contracts = self.contracts.lock().unwrap();
+        contracts
+            .get(&address)
+            .cloned()
+            .expect(format!("Contract not found: {}", address).as_str())
+    }
+
+    pub fn deploy_contract(&self, bytes: &[u8]) -> Address {
+        let address = Address::random();
+
+        let contract = ContractState::new(bytes, address);
+        let contract = Arc::new(Mutex::new(contract));
+
+        let mut contracts = self.contracts.lock().unwrap();
+        contracts.insert(address, contract.clone());
+
+        address
     }
 }
 

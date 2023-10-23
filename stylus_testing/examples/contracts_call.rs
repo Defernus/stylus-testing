@@ -45,11 +45,16 @@ async fn main() {
         .unwrap()
         .with_chain_id(4_u64);
 
-    let mut contract = ContractState::new(CONTRACT_BYTES);
-    contract.set_sender(wallet.address());
-    let contract = Arc::new(Mutex::new(contract));
+    let inner_provider = TestInnerProvider::new();
+    let contract_address = inner_provider.deploy_contract(CONTRACT_BYTES);
+    {
+        let contract = inner_provider.contract(contract_address);
+        let mut contract = contract.lock().unwrap();
 
-    let test_provider = TestProvider::new(TestInnerProvider::new(contract));
+        contract.set_sender(wallet.address());
+    }
+
+    let test_provider = TestProvider::new(inner_provider);
 
     let client = Arc::new(SignerMiddleware::new(test_provider, wallet.clone()));
 
