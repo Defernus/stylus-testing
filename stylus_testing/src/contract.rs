@@ -4,14 +4,13 @@ use std::{
 };
 
 use ethers::types::{Address, U256};
-use stylus_sdk::keccak_const::Keccak256;
 use thiserror::Error as ThisError;
 use wasmer::{
-    imports, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView, Module,
-    RuntimeError, Store, Value,
+    imports, AsStoreRef, Function, FunctionEnv, FunctionEnvMut, Instance, Memory, MemoryView,
+    Module, RuntimeError, Store, StoreMut, Value,
 };
 
-use crate::provider::FromContractResult;
+use crate::{provider::FromContractResult, vm_hooks};
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
@@ -23,7 +22,7 @@ pub enum ContractCallError {
 
 #[derive(Clone, Debug)]
 pub struct Env {
-    reentrant_counter: Arc<Mutex<i32>>,
+    reentrant_counter: Arc<Mutex<u32>>,
     memory: Option<Memory>,
     entrypoint_data: Arc<Mutex<Vec<u8>>>,
     value: Arc<Mutex<U256>>,
@@ -49,15 +48,12 @@ impl ContractState {
 
         let module = Module::new(&store, bytes).unwrap();
 
-        let shared_counter: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
-        let value: Arc<Mutex<U256>> = Arc::new(Mutex::new(U256::zero()));
-
         let env = FunctionEnv::new(
             &mut store,
             Env {
-                value,
+                value: Arc::new(Mutex::new(U256::zero())),
                 block_number: Arc::new(Mutex::new(0)),
-                reentrant_counter: shared_counter.clone(),
+                reentrant_counter: Arc::new(Mutex::new(0)),
                 entrypoint_data: Arc::new(Mutex::new(Vec::new())),
                 storage_bytes32: Arc::new(Mutex::new(HashMap::new())),
                 result: Arc::new(Mutex::new(Vec::new())),
@@ -69,19 +65,19 @@ impl ContractState {
 
         let import_object = imports! {
             "vm_hooks" => {
-                "msg_reentrant" => Function::new_typed_with_env(&mut store, &env, msg_reentrant),
-                "read_args" => Function::new_typed_with_env(&mut store, &env, read_args),
-                "storage_store_bytes32" => Function::new_typed_with_env(&mut store, &env, storage_store_bytes32),
-                "write_result" => Function::new_typed_with_env(&mut store, &env, write_result),
-                "native_keccak256" => Function::new_typed_with_env(&mut store, &env, native_keccak256),
-                "storage_load_bytes32" => Function::new_typed_with_env(&mut store, &env, storage_load_bytes32),
-                "msg_value" => Function::new_typed_with_env(&mut store, &env, msg_value),
-                "emit_log" => Function::new_typed_with_env(&mut store, &env, emit_log),
-                "memory_grow" => Function::new_typed_with_env(&mut store, &env, memory_grow),
-                "msg_sender" => Function::new_typed_with_env(&mut store, &env, msg_sender),
+                "msg_reentrant" => Function::new_typed_with_env(&mut store, &env, vm_hooks::msg_reentrant),
+                "read_args" => Function::new_typed_with_env(&mut store, &env, vm_hooks::read_args),
+                "storage_store_bytes32" => Function::new_typed_with_env(&mut store, &env, vm_hooks::storage_store_bytes32),
+                "write_result" => Function::new_typed_with_env(&mut store, &env, vm_hooks::write_result),
+                "native_keccak256" => Function::new_typed_with_env(&mut store, &env, vm_hooks::native_keccak256),
+                "storage_load_bytes32" => Function::new_typed_with_env(&mut store, &env, vm_hooks::storage_load_bytes32),
+                "msg_value" => Function::new_typed_with_env(&mut store, &env, vm_hooks::msg_value),
+                "emit_log" => Function::new_typed_with_env(&mut store, &env, vm_hooks::emit_log),
+                "memory_grow" => Function::new_typed_with_env(&mut store, &env, vm_hooks::memory_grow),
+                "msg_sender" => Function::new_typed_with_env(&mut store, &env, vm_hooks::msg_sender),
             },
             "console" => {
-                "log_txt" => Function::new_typed_with_env(&mut store, &env, log_txt),
+                "log_txt" => Function::new_typed_with_env(&mut store, &env, vm_hooks::log_txt),
             }
         };
 
@@ -195,184 +191,87 @@ impl ContractState {
     }
 }
 
-/// Returns if current call is reentrant
-pub fn msg_reentrant(mut env: FunctionEnvMut<Env>) -> i32 {
-    println!("call from wasm: msg_reentrant()");
+impl Env {
+    pub fn memory_mut(&mut self) -> &mut Memory {
+        self.memory.as_mut().expect("memory should be initialized")
+    }
 
-    let (env, _) = env.data_and_store_mut();
+    pub fn memory(&self) -> &Memory {
+        self.memory.as_ref().expect("memory should be initialized")
+    }
 
-    let mut counter = env.reentrant_counter.lock().unwrap();
+    pub fn sender(&self) -> Address {
+        let sender = self.sender.lock().unwrap().clone();
 
-    let result = *counter;
+        sender
+    }
 
-    *counter += 1;
+    pub fn set_sender(&mut self, new_sender: Address) {
+        let mut sender = self.sender.lock().unwrap();
 
-    println!("\t└ result: {result}");
+        *sender = new_sender;
+    }
 
-    result
-}
+    pub fn value(&self) -> U256 {
+        let value = self.value.lock().unwrap().clone();
 
-pub fn read_args(mut env: FunctionEnvMut<Env>, dest_ptr: u32) {
-    println!("call from wasm: read_args({dest_ptr:?})");
+        value
+    }
 
-    let (env, store) = env.data_and_store_mut();
+    pub fn set_value(&mut self, new_value: U256) {
+        let mut value = self.value.lock().unwrap();
 
-    let memory = env.memory.as_mut().unwrap();
+        *value = new_value;
+    }
 
-    let data = env.entrypoint_data.lock().unwrap();
+    pub fn set_result(&mut self, data: Vec<u8>) {
+        let mut result = self.result.lock().unwrap();
 
-    let view = memory.view(&store);
-    view.write(dest_ptr as u64, &data).unwrap();
-}
+        *result = data;
+    }
 
-pub fn storage_store_bytes32(mut env: FunctionEnvMut<Env>, key_ptr: u32, value_ptr: u32) {
-    let (env, store) = env.data_and_store_mut();
+    pub fn storage_bytes32_get(&self, key: U256) -> U256 {
+        let storage = self.storage_bytes32.lock().unwrap();
 
-    let memory = env.memory.as_mut().unwrap();
-    let view = memory.view(&store);
+        storage.get(&key).cloned().unwrap_or_default()
+    }
 
-    let key = read_u256(&view, key_ptr as u64);
-    let value = read_u256(&view, value_ptr as u64);
+    pub fn storage_bytes32_insert(&mut self, key: U256, value: U256) {
+        let mut storage = self.storage_bytes32.lock().unwrap();
 
-    println!("call from wasm: storage_store_bytes32({key}, {value})");
+        storage.insert(key, value);
+    }
 
-    let mut storage = env.storage_bytes32.lock().unwrap();
+    pub fn entrypoint_data(&self) -> Vec<u8> {
+        let entrypoint_data = self.entrypoint_data.lock().unwrap();
 
-    storage.insert(key, value);
-}
+        entrypoint_data.clone()
+    }
 
-pub fn storage_load_bytes32(mut env: FunctionEnvMut<Env>, key_ptr: u32, dest_ptr: u32) {
-    let (env, store) = env.data_and_store_mut();
+    pub fn set_entrypoint_data(&mut self, data: Vec<u8>) {
+        let mut entrypoint_data = self.entrypoint_data.lock().unwrap();
 
-    let memory = env.memory.as_mut().unwrap();
-    let view = memory.view(&store);
+        *entrypoint_data = data;
+    }
 
-    let key = read_u256(&view, key_ptr as u64);
+    pub fn reentrant_counter(&self) -> u32 {
+        self.reentrant_counter.lock().unwrap().clone()
+    }
 
-    println!("call from wasm: storage_load_bytes32({key}, {dest_ptr})");
+    pub fn inc_reentrant_counter(&mut self) {
+        let mut reentrant_counter = self.reentrant_counter.lock().unwrap();
 
-    let storage = env.storage_bytes32.lock().unwrap();
+        *reentrant_counter += 1;
+    }
 
-    let value = storage.get(&key).cloned().unwrap_or_default();
+    pub fn reset_reentrant_counter(&mut self) {
+        let mut reentrant_counter = self.reentrant_counter.lock().unwrap();
 
-    println!("\t└ value: {value}");
-    write_u256(&view, dest_ptr as u64, value);
-}
+        *reentrant_counter = 0;
+    }
 
-pub fn write_result(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
-    let (env, store) = env.data_and_store_mut();
-
-    let memory = env.memory.as_mut().unwrap();
-    let view = memory.view(&store);
-
-    let result = read_bytes(&view, data_ptr, len);
-
-    println!("call from wasm: write_result({data_ptr}, {len})");
-    println!("\t└ result: 0x{}", hex::encode(&result));
-
-    let mut env_result = env.result.lock().unwrap();
-    *env_result = result;
-}
-
-pub fn native_keccak256(mut env: FunctionEnvMut<Env>, bytes: u32, len: u32, output_ptr: u32) {
-    let (env, store) = env.data_and_store_mut();
-
-    let memory = env.memory.as_mut().unwrap();
-    let view = memory.view(&store);
-
-    let data = read_bytes(&view, bytes, len);
-    println!("call from wasm: native_keccak256({data:?}, {output_ptr})");
-
-    let output = Keccak256::new().update(&data).finalize();
-    println!(
-        "\t└ output: 0x{} ({})",
-        hex::encode(&output),
-        U256::from_big_endian(&output)
-    );
-
-    write_bytes(&view, output_ptr as u64, &output);
-}
-
-pub fn msg_value(mut env: FunctionEnvMut<Env>, value_ptr: u32) {
-    let (env, store) = env.data_and_store_mut();
-    let value = env.value.lock().unwrap().clone();
-
-    let memory = env.memory.as_mut().unwrap();
-
-    let mut data = vec![0; 32];
-    value.to_big_endian(&mut data);
-
-    let view = memory.view(&store);
-    view.write(value_ptr as u64, &data).unwrap();
-    println!("call from wasm: msg_value({value_ptr}) -> {value}");
-}
-
-pub fn emit_log(mut _env: FunctionEnvMut<Env>, data_ptr: u32, len: u32, topics: u32) {
-    println!("call from wasm: emit_log({data_ptr}, {len}, {topics})");
-}
-
-pub fn memory_grow(mut _env: FunctionEnvMut<Env>, pages: u32) {
-    println!("call from wasm: memory_grow({pages})");
-}
-
-pub fn msg_sender(mut env: FunctionEnvMut<Env>, sender_ptr: u32) {
-    println!("call from wasm: msg_sender({sender_ptr})");
-
-    let (env, store) = env.data_and_store_mut();
-
-    let memory = env.memory.as_mut().unwrap();
-
-    let view = memory.view(&store);
-
-    let sender = env.sender.lock().unwrap().clone();
-    println!("\t└ sender: {}", sender);
-
-    let bytes: [u8; 20] = sender.into();
-
-    view.write(sender_ptr as u64, &bytes).unwrap();
-}
-
-pub fn log_txt(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
-    let (env, store) = env.data_and_store_mut();
-
-    let memory = env.memory.as_ref().unwrap();
-
-    let view = memory.view(&store);
-    let msg = read_str(&view, data_ptr, len);
-
-    println!("call from wasm: log_txt({msg})");
-}
-
-fn read_str(view: &MemoryView, data_ptr: u32, len: u32) -> String {
-    let mut buf = vec![0; len as usize];
-    view.read(data_ptr as u64, &mut buf).unwrap();
-
-    String::from_utf8(buf).unwrap()
-}
-
-fn read_bytes(view: &MemoryView, data_ptr: u32, len: u32) -> Vec<u8> {
-    let len = len as usize;
-
-    let mut buf = vec![0; len];
-    view.read(data_ptr as u64, &mut buf).unwrap();
-
-    buf
-}
-
-fn read_u256(view: &MemoryView, ptr: u64) -> U256 {
-    let mut data = vec![0; 32];
-    view.read(ptr, &mut data).unwrap();
-
-    U256::from_big_endian(&data)
-}
-
-fn write_u256(view: &MemoryView, ptr: u64, value: U256) {
-    let mut data = vec![0; 32];
-    value.to_big_endian(&mut data);
-
-    write_bytes(view, ptr, &data);
-}
-
-fn write_bytes(view: &MemoryView, ptr: u64, data: &[u8]) {
-    view.write(ptr, data).unwrap();
+    pub fn view(&self, store: &impl AsStoreRef) -> MemoryView {
+        let memory = self.memory();
+        memory.view(store)
+    }
 }
