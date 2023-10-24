@@ -2,7 +2,10 @@ use ethers::types::{Address, U256};
 use stylus_sdk::keccak_const::Keccak256;
 use wasmer::{FunctionEnvMut, MemoryView};
 
-use crate::contract::{ContractCall, ContractCallError, Env};
+use crate::{
+    contract::{ContractCall, ContractCallError, Env},
+    provider::TestProvider,
+};
 
 /// Returns if current call is reentrant
 pub fn msg_reentrant(mut env: FunctionEnvMut<Env>) -> u32 {
@@ -77,15 +80,15 @@ pub fn native_keccak256(mut env: FunctionEnvMut<Env>, bytes: u32, len: u32, outp
 
     let data = read_bytes(&view, bytes, len);
 
-    let contract_addr = env.address();
-    println!("{contract_addr} -> native_keccak256({data:?}, {output_ptr})");
+    // let contract_addr = env.address();
+    // println!("{contract_addr} -> native_keccak256({data:?}, {output_ptr})");
 
     let output = Keccak256::new().update(&data).finalize();
-    println!(
-        "\t└ output: 0x{} ({})",
-        hex::encode(&output),
-        U256::from_big_endian(&output)
-    );
+    // println!(
+    //     "\t└ output: 0x{} ({})",
+    //     hex::encode(&output),
+    //     U256::from_big_endian(&output)
+    // );
 
     write_bytes(&view, output_ptr as u64, &output);
 }
@@ -161,16 +164,24 @@ pub fn call_contract(
 
     let contract_addr = read_addr(&view, contract_ptr as u64);
 
-    let data = read_bytes(&view, calldata_ptr, calldata_len);
-
     let value = read_u256(&view, value_ptr as u64);
+
+    if calldata_len == 0 {
+        // TODO add error handling
+        env.provider().send_eth(env.sender(), contract_addr, value);
+        return 0;
+    }
+
+    let data = read_bytes(&view, calldata_ptr, calldata_len);
 
     let str_data = hex::encode(&data);
     println!("{contract_addr} -> call_contract({contract_addr}, Ox{str_data}, {value})");
 
     let provider = env.provider();
 
-    let contract_state = provider.contract(contract_addr);
+    let contract_state = provider
+        .contract(contract_addr)
+        .expect("Contract not found");
     let mut contract = ContractCall::new(provider, contract_addr, contract_state)
         .with_value(value)
         .with_sender(env.address());
@@ -218,7 +229,9 @@ pub fn delegate_call_contract(
     let str_data = hex::encode(&data);
     println!("{contract_addr} -> delegate_call_contract({contract_addr}, Ox{str_data})");
 
-    let contract = provider.contract(contract_addr);
+    let contract = provider
+        .contract(contract_addr)
+        .expect("Contract not found");
     let mut contract =
         ContractCall::new(provider, contract_addr, contract).with_sender(env.address());
 
@@ -265,7 +278,9 @@ pub fn static_call_contract(
     let str_data = hex::encode(&data);
     println!("{contract_addr} -> static_call_contract({contract_addr}, Ox{str_data})");
 
-    let contract = provider.contract(contract_addr);
+    let contract = provider
+        .contract(contract_addr)
+        .expect("Contract not found");
     let mut contract =
         ContractCall::new(provider, contract_addr, contract).with_sender(env.address());
 

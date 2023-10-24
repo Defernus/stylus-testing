@@ -113,14 +113,17 @@ impl JsonRpcClient for TestInnerProvider {
 
                 let params = serde_json::from_str::<(EthCallParams, String)>(&params).unwrap();
 
+                let value = params.0.value;
                 let data = hex::decode(&params.0.data[2..]).unwrap();
                 let contract_address = params.0.to;
                 let sender_address = params.0.from;
 
-                let contract_state = self.contract(contract_address);
+                let contract_state = self.contract(contract_address).expect("Contract not found");
+
                 let mut contract =
                     ContractCall::new(self.clone(), contract_address, contract_state)
-                        .with_sender(sender_address);
+                        .with_sender(sender_address)
+                        .with_value(value);
 
                 let res: Bytes = contract.entry_point(&data)?.into();
 
@@ -255,13 +258,10 @@ impl JsonRpcClient for TestInnerProvider {
 }
 
 impl TestInnerProvider {
-    pub fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+    pub fn contract(&self, address: Address) -> Option<Arc<Mutex<ContractState>>> {
         let contracts = self.contracts.lock().unwrap();
 
-        contracts
-            .get(&address)
-            .cloned()
-            .expect(format!("Contract not found: {}", address).as_str())
+        contracts.get(&address).cloned()
     }
 
     pub fn block_number(&self) -> U64 {
@@ -275,51 +275,25 @@ impl TestInnerProvider {
 
         *block_number += 1;
     }
-
-    pub fn mint_eth(&self, to: Address, amount: U256) {
-        let mut balances = self.balances.lock().unwrap();
-
-        let balance = balances.entry(to).or_insert(U256::zero());
-        *balance += amount;
-    }
-
-    // TODO add error handling
-    pub fn send_eth(&self, from: Address, to: Address, amount: U256) {
-        let mut balances = self.balances.lock().unwrap();
-
-        let from_balance = balances.entry(from).or_insert(U256::zero());
-
-        if *from_balance < amount {
-            panic!("Insufficient funds");
-        }
-
-        *from_balance -= amount;
-
-        let to_balance = balances.entry(to).or_insert(U256::zero());
-        *to_balance += amount;
-    }
-
-    pub fn balance(&self, address: Address) -> U256 {
-        let balances = self.balances.lock().unwrap();
-
-        balances.get(&address).cloned().unwrap_or_default()
-    }
 }
 
 pub trait TestProvider {
-    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>>;
+    fn contract(&self, address: Address) -> Option<Arc<Mutex<ContractState>>>;
 
     fn deploy_contract(&self, bytes: &[u8]) -> Address;
+
+    fn mint_eth(&self, to: Address, amount: U256);
+
+    fn send_eth(&self, from: Address, to: Address, amount: U256);
+
+    fn balance(&self, address: Address) -> U256;
 }
 
 impl TestProvider for TestInnerProvider {
-    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+    fn contract(&self, address: Address) -> Option<Arc<Mutex<ContractState>>> {
         let contracts = self.contracts.lock().unwrap();
 
-        contracts
-            .get(&address)
-            .cloned()
-            .expect(format!("Contract not found: {}", address).as_str())
+        contracts.get(&address).cloned()
     }
 
     fn deploy_contract(&self, bytes: &[u8]) -> Address {
@@ -332,10 +306,45 @@ impl TestProvider for TestInnerProvider {
 
         address
     }
+
+    fn mint_eth(&self, to: Address, amount: U256) {
+        let mut balances = self.balances.lock().unwrap();
+
+        let balance = balances.entry(to).or_insert(U256::zero());
+        *balance += amount;
+
+        println!("mint_eth: {} {}", to, amount);
+        println!("\t└ balance: {}", balance);
+    }
+
+    // TODO add error handling
+    fn send_eth(&self, from: Address, to: Address, amount: U256) {
+        let mut balances = self.balances.lock().unwrap();
+
+        let from_balance = balances.entry(from).or_insert(U256::zero());
+
+        println!("send_eth: {} -> {} {}", from, to, amount);
+        println!("\t└ sender_balance: {}", from_balance);
+
+        if *from_balance < amount {
+            panic!("Insufficient funds");
+        }
+
+        *from_balance -= amount;
+
+        let to_balance = balances.entry(to).or_insert(U256::zero());
+        *to_balance += amount;
+    }
+
+    fn balance(&self, address: Address) -> U256 {
+        let balances = self.balances.lock().unwrap();
+
+        balances.get(&address).cloned().unwrap_or_default()
+    }
 }
 
 impl TestProvider for Arc<TestClient> {
-    fn contract(&self, address: Address) -> Arc<Mutex<ContractState>> {
+    fn contract(&self, address: Address) -> Option<Arc<Mutex<ContractState>>> {
         let p: TestInnerProvider = self.provider().as_ref().clone();
         p.contract(address)
     }
@@ -343,6 +352,21 @@ impl TestProvider for Arc<TestClient> {
     fn deploy_contract(&self, bytes: &[u8]) -> Address {
         let p: TestInnerProvider = self.provider().as_ref().clone();
         p.deploy_contract(bytes)
+    }
+
+    fn mint_eth(&self, to: Address, amount: U256) {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.mint_eth(to, amount)
+    }
+
+    fn send_eth(&self, from: Address, to: Address, amount: U256) {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.send_eth(from, to, amount)
+    }
+
+    fn balance(&self, address: Address) -> U256 {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.balance(address)
     }
 }
 
@@ -356,6 +380,8 @@ pub struct EthCallParams {
     to: Address,
     #[serde(rename = "type")]
     tx_type: String,
+    #[serde(default)]
+    value: U256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

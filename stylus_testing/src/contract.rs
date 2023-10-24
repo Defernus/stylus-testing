@@ -10,7 +10,10 @@ use wasmer::{
     Store, Value,
 };
 
-use crate::{provider::TestInnerProvider, vm_hooks};
+use crate::{
+    provider::{TestInnerProvider, TestProvider},
+    vm_hooks,
+};
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
@@ -158,6 +161,10 @@ impl ContractCall {
 
             env.entrypoint_data = data_ptr.to_vec();
             env.state.lock().unwrap().reset_result();
+
+            if env.value > U256::zero() {
+                env.provider.send_eth(env.sender, env.address, env.value);
+            }
         }
 
         let entrypoint = self
@@ -184,7 +191,8 @@ impl ContractCall {
 
         if result != 0 {
             return Err(ContractCallError::Message(
-                String::from_utf8(result_data).unwrap(),
+                String::from_utf8(result_data.clone())
+                    .unwrap_or_else(|_| format!("{:?}", hex::encode(result_data))),
             ));
         }
 
