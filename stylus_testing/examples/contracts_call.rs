@@ -47,7 +47,7 @@ async fn main() {
 
     let client = Arc::new(SignerMiddleware::new(test_provider, wallet.clone()));
 
-    let token_addr = client.deploy_contract(CONTRACT_BYTES);
+    let token_addr = client.deploy_contract(CONTRACT_BYTES, "btc");
 
     let token = Erc20::new(token_addr, client.clone());
 

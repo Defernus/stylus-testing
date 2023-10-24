@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    fmt::Debug,
+    fmt::{Debug, Display},
     sync::{Arc, Mutex},
 };
 
@@ -31,6 +31,7 @@ pub struct TestInnerProvider {
     contracts: Arc<Mutex<HashMap<Address, Arc<Mutex<ContractState>>>>>,
     balances: Arc<Mutex<HashMap<Address, U256>>>,
     transactions: Arc<Mutex<HashMap<U256, Transaction>>>,
+    labels: Arc<Mutex<HashMap<Address, String>>>,
     block_number: Arc<Mutex<u64>>,
 }
 
@@ -41,6 +42,7 @@ impl TestInnerProvider {
             balances: Arc::default(),
             transactions: Arc::default(),
             block_number: Arc::default(),
+            labels: Arc::default(),
         }
     }
 }
@@ -64,7 +66,7 @@ pub enum ClientError {
         text: String,
     },
 
-    #[error("Contract call error: {0}")]
+    #[error("{0}")]
     ContractCallError(#[from] ContractCallError),
 }
 
@@ -104,12 +106,12 @@ impl JsonRpcClient for TestInnerProvider {
         method: &str,
         params: T,
     ) -> Result<R, ClientError> {
-        println!("method: {} -> {}", method, std::any::type_name::<R>());
+        log::debug!("method: {} -> {}", method, std::any::type_name::<R>());
 
         match method {
             "eth_call" => {
                 let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
+                log::debug!("raw_params: {}", params);
 
                 let params = serde_json::from_str::<(EthCallParams, String)>(&params).unwrap();
 
@@ -129,7 +131,7 @@ impl JsonRpcClient for TestInnerProvider {
 
                 let res = serde_json::to_string(&res).unwrap();
 
-                println!("res: {}", res);
+                log::debug!("res: {}", res);
 
                 return Ok(serde_json::from_str(&res).unwrap());
             }
@@ -141,9 +143,6 @@ impl JsonRpcClient for TestInnerProvider {
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             "eth_getTransactionCount" => {
-                let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
-
                 let transaction_count = U256::zero();
 
                 let res = serde_json::to_string(&transaction_count).unwrap();
@@ -151,9 +150,6 @@ impl JsonRpcClient for TestInnerProvider {
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             "eth_gasPrice" => {
-                let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
-
                 let gas_price = U256::zero();
 
                 let res = serde_json::to_string(&gas_price).unwrap();
@@ -161,9 +157,6 @@ impl JsonRpcClient for TestInnerProvider {
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             "eth_estimateGas" => {
-                let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
-
                 let gas = U256::zero();
 
                 let res = serde_json::to_string(&gas).unwrap();
@@ -172,14 +165,14 @@ impl JsonRpcClient for TestInnerProvider {
             }
             "eth_sendRawTransaction" => {
                 let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
+                log::debug!("raw_params: {}", params);
 
                 let (tx_data,) = serde_json::from_str::<(Bytes,)>(&params).unwrap();
 
                 let data = rlp::Rlp::new(tx_data.as_ref());
 
                 let tx = TransactionRequest::decode_unsigned_rlp(&data).unwrap();
-                println!("tx: {:?}", tx);
+                log::debug!("tx: {:?}", tx);
 
                 if tx.data.is_some() {
                     unimplemented!("Data is not supported yet {tx:?}");
@@ -202,22 +195,20 @@ impl JsonRpcClient for TestInnerProvider {
                     };
                 }
 
-                let tx_hash = rand::random::<[u8; 32]>();
-                let tx_hash = U256::from_big_endian(&tx_hash);
+                let tx_hash_data = rand::random::<[u8; 32]>();
+                let tx_hash = H256::from_slice(&tx_hash_data);
 
                 {
                     let mut transactions = self.transactions.lock().unwrap();
 
-                    let mut hash_data = vec![0u8; 32];
-                    tx_hash.to_big_endian(&mut hash_data);
-
                     let mut result_tx = Transaction::default();
-                    result_tx.hash = H256::from_slice(&hash_data);
+                    result_tx.hash = tx_hash;
                     result_tx.from = tx.from.unwrap_or_default();
                     result_tx.value = tx.value.unwrap_or_default();
                     result_tx.to = to;
                     result_tx.block_number = Some(self.block_number());
 
+                    let tx_hash = U256::from_big_endian(&tx_hash_data);
                     transactions.insert(tx_hash, result_tx);
                 }
 
@@ -226,7 +217,6 @@ impl JsonRpcClient for TestInnerProvider {
             }
             "eth_getTransactionByHash" => {
                 let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
 
                 let (tx_hash,) = serde_json::from_str::<(U256,)>(&params).unwrap();
 
@@ -237,7 +227,6 @@ impl JsonRpcClient for TestInnerProvider {
             }
             "eth_getTransactionReceipt" => {
                 let params = serde_json::to_string(&params).unwrap();
-                println!("raw_params: {}", params);
 
                 let (tx_hash,) = serde_json::from_str::<(U256,)>(&params).unwrap();
 
@@ -250,6 +239,21 @@ impl JsonRpcClient for TestInnerProvider {
                 res.block_number = Some(self.block_number());
 
                 let res = serde_json::to_string(&res).unwrap();
+                return Ok(serde_json::from_str(&res).unwrap());
+            }
+            "eth_getBalance" => {
+                let params = serde_json::to_string(&params).unwrap();
+
+                let (addr, time_stamp) =
+                    serde_json::from_str::<(Address, String)>(&params).unwrap();
+
+                if time_stamp != "latest" {
+                    unimplemented!("time_stamp: {}", time_stamp);
+                }
+
+                let balance = self.balance(addr);
+
+                let res = serde_json::to_string(&balance).unwrap();
                 return Ok(serde_json::from_str(&res).unwrap());
             }
             method => unimplemented!("Method \"{method}\""),
@@ -280,13 +284,17 @@ impl TestInnerProvider {
 pub trait TestProvider {
     fn contract(&self, address: Address) -> Option<Arc<Mutex<ContractState>>>;
 
-    fn deploy_contract(&self, bytes: &[u8]) -> Address;
+    fn deploy_contract(&self, bytes: &[u8], label: impl Display) -> Address;
 
     fn mint_eth(&self, to: Address, amount: U256);
 
     fn send_eth(&self, from: Address, to: Address, amount: U256);
 
     fn balance(&self, address: Address) -> U256;
+
+    fn label(&self, address: Address) -> String;
+
+    fn set_label(&self, address: Address, label: String);
 }
 
 impl TestProvider for TestInnerProvider {
@@ -296,10 +304,11 @@ impl TestProvider for TestInnerProvider {
         contracts.get(&address).cloned()
     }
 
-    fn deploy_contract(&self, bytes: &[u8]) -> Address {
+    fn deploy_contract(&self, bytes: &[u8], label: impl Display) -> Address {
         let address = Address::random();
 
         let state = Arc::new(Mutex::new(ContractState::new(bytes)));
+        self.set_label(address, label.to_string());
 
         let mut contracts = self.contracts.lock().unwrap();
         contracts.insert(address, state.clone());
@@ -313,8 +322,8 @@ impl TestProvider for TestInnerProvider {
         let balance = balances.entry(to).or_insert(U256::zero());
         *balance += amount;
 
-        println!("mint_eth: {} {}", to, amount);
-        println!("\t└ balance: {}", balance);
+        log::debug!("mint_eth: {} {}", self.label(to), amount);
+        log::debug!("\t└ balance: {}", balance);
     }
 
     // TODO add error handling
@@ -323,8 +332,13 @@ impl TestProvider for TestInnerProvider {
 
         let from_balance = balances.entry(from).or_insert(U256::zero());
 
-        println!("send_eth: {} -> {} {}", from, to, amount);
-        println!("\t└ sender_balance: {}", from_balance);
+        log::debug!(
+            "send_eth: {} -> {} {}",
+            self.label(from),
+            self.label(to),
+            amount
+        );
+        log::debug!("\t└ sender_balance: {}", from_balance);
 
         if *from_balance < amount {
             panic!("Insufficient funds");
@@ -341,6 +355,20 @@ impl TestProvider for TestInnerProvider {
 
         balances.get(&address).cloned().unwrap_or_default()
     }
+
+    fn label(&self, address: Address) -> String {
+        let labels = self.labels.lock().unwrap();
+
+        let label = labels.get(&address).cloned().unwrap_or(address.to_string());
+
+        label
+    }
+
+    fn set_label(&self, address: Address, label: String) {
+        let mut labels = self.labels.lock().unwrap();
+
+        labels.insert(address, label);
+    }
 }
 
 impl TestProvider for Arc<TestClient> {
@@ -349,9 +377,9 @@ impl TestProvider for Arc<TestClient> {
         p.contract(address)
     }
 
-    fn deploy_contract(&self, bytes: &[u8]) -> Address {
+    fn deploy_contract(&self, bytes: &[u8], label: impl Display) -> Address {
         let p: TestInnerProvider = self.provider().as_ref().clone();
-        p.deploy_contract(bytes)
+        p.deploy_contract(bytes, label)
     }
 
     fn mint_eth(&self, to: Address, amount: U256) {
@@ -367,6 +395,16 @@ impl TestProvider for Arc<TestClient> {
     fn balance(&self, address: Address) -> U256 {
         let p: TestInnerProvider = self.provider().as_ref().clone();
         p.balance(address)
+    }
+
+    fn label(&self, address: Address) -> String {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.label(address)
+    }
+
+    fn set_label(&self, address: Address, label: String) {
+        let p: TestInnerProvider = self.provider().as_ref().clone();
+        p.set_label(address, label)
     }
 }
 

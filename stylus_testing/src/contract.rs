@@ -17,7 +17,7 @@ use crate::{
 
 #[derive(Debug, ThisError, Clone)]
 pub enum ContractCallError {
-    #[error("Contract call error: {0}")]
+    #[error("{0}")]
     Message(String),
     #[error("Runtime error: {0}")]
     RuntimeError(#[from] RuntimeError),
@@ -178,16 +178,21 @@ impl ContractCall {
         let results = result.to_vec();
         let result = results[0].i32().unwrap();
 
-        let result_data = self
-            .env
-            .as_mut(&mut self.store)
-            .state
-            .lock()
-            .unwrap()
-            .result
-            .clone();
+        let result_data = {
+            self.env
+                .as_mut(&mut self.store)
+                .state
+                .lock()
+                .unwrap()
+                .result
+                .clone()
+        };
 
-        println!("{} -> result: {}", self.address(), result);
+        log::debug!(
+            "{} -> result: {}",
+            self.env.as_ref(&self.store).label(self.address()),
+            result
+        );
 
         if result != 0 {
             return Err(ContractCallError::Message(
@@ -244,6 +249,10 @@ impl Env {
 
     pub fn provider(&self) -> TestInnerProvider {
         self.provider.clone()
+    }
+
+    pub fn label(&self, address: Address) -> String {
+        self.provider.label(address)
     }
 
     pub fn value(&self) -> U256 {

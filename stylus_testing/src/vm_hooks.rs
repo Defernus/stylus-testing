@@ -11,12 +11,12 @@ use crate::{
 pub fn msg_reentrant(mut env: FunctionEnvMut<Env>) -> u32 {
     let (env, _) = env.data_and_store_mut();
 
-    let contract_addr = env.address();
-    println!("{contract_addr} -> msg_reentrant()");
+    // let contract_addr = env.address();
+    // log::debug!("{addr} -> msg_reentrant()", addr = env.label(contract_addr));
 
     let counter = env.reentrant_counter();
 
-    println!("\t└ result: {counter}");
+    // log::debug!("\t└ result: {counter}");
 
     counter
 }
@@ -24,8 +24,8 @@ pub fn msg_reentrant(mut env: FunctionEnvMut<Env>) -> u32 {
 pub fn read_args(mut env: FunctionEnvMut<Env>, dest_ptr: u32) {
     let (env, store) = env.data_and_store_mut();
 
-    let contract_addr = env.address();
-    println!("{contract_addr} -> read_args({dest_ptr:?})");
+    // let contract_addr = env.address();
+    // log::debug!("{addr} -> read_args({dest_ptr:?})", addr = env.label(contract_addr));
 
     let view = env.view(&store);
 
@@ -40,7 +40,10 @@ pub fn storage_store_bytes32(mut env: FunctionEnvMut<Env>, key_ptr: u32, value_p
     let value = read_u256(&view, value_ptr as u64);
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> storage_store_bytes32({key}, {value})");
+    log::debug!(
+        "{addr} -> storage_store_bytes32({key}, {value})",
+        addr = env.label(contract_addr)
+    );
 
     env.storage_bytes32_insert(key, value);
 }
@@ -51,13 +54,15 @@ pub fn storage_load_bytes32(mut env: FunctionEnvMut<Env>, key_ptr: u32, dest_ptr
 
     let key = read_u256(&view, key_ptr as u64);
 
-    let value = env.storage_bytes32_get(key);
+    let result = env.storage_bytes32_get(key);
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> storage_load_bytes32({key}, {dest_ptr})");
+    log::debug!(
+        "{addr} -> storage_load_bytes32({key}) -> {result}",
+        addr = env.label(contract_addr)
+    );
 
-    println!("\t└ value: {value}");
-    write_u256(&view, dest_ptr as u64, value);
+    write_u256(&view, dest_ptr as u64, result);
 }
 
 /// Receives a result from a call and stores it in the contract state
@@ -67,9 +72,9 @@ pub fn write_result(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
 
     let result = read_bytes(&view, data_ptr, len);
 
-    let contract_addr = env.address();
-    println!("{contract_addr} -> write_result({data_ptr}, {len})");
-    println!("\t└ result: 0x{}", hex::encode(&result));
+    // let contract_addr = env.address();
+    // log::debug!("{addr} -> write_result({data_ptr}, {len})", addr = env.label(contract_addr));
+    // log::debug!("\t└ result: 0x{}", hex::encode(&result));
 
     env.set_result(result);
 }
@@ -81,10 +86,10 @@ pub fn native_keccak256(mut env: FunctionEnvMut<Env>, bytes: u32, len: u32, outp
     let data = read_bytes(&view, bytes, len);
 
     // let contract_addr = env.address();
-    // println!("{contract_addr} -> native_keccak256({data:?}, {output_ptr})");
+    // log::debug!("{addr} -> native_keccak256({data:?}, {output_ptr})", addr = env.label(contract_addr));
 
     let output = Keccak256::new().update(&data).finalize();
-    // println!(
+    // log::debug!(
     //     "\t└ output: 0x{} ({})",
     //     hex::encode(&output),
     //     U256::from_big_endian(&output)
@@ -105,32 +110,49 @@ pub fn msg_value(mut env: FunctionEnvMut<Env>, value_ptr: u32) {
     view.write(value_ptr as u64, &data).unwrap();
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> msg_value({value_ptr}) -> {value}");
+    log::debug!(
+        "{addr} -> msg_value({value_ptr}) -> {value}",
+        addr = env.label(contract_addr)
+    );
 }
 
 pub fn emit_log(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32, topics: u32) {
-    let (env, _) = env.data_and_store_mut();
+    let (env, store) = env.data_and_store_mut();
+    let view = env.view(&store);
     let contract_addr = env.address();
 
-    println!("{contract_addr} -> emit_log({data_ptr}, {len}, {topics})");
+    let data = read_bytes(&view, data_ptr, len);
+
+    let str_data =
+        String::from_utf8(data.clone()).unwrap_or_else(|_| format!("0x{}", hex::encode(&data)));
+
+    log::debug!(
+        "{addr} -> emit_log({str_data}, {topics})",
+        addr = env.label(contract_addr)
+    );
 }
 
 pub fn memory_grow(mut env: FunctionEnvMut<Env>, pages: u32) {
     let (env, _) = env.data_and_store_mut();
     let contract_addr = env.address();
 
-    println!("{contract_addr} -> memory_grow({pages})");
+    log::debug!(
+        "{addr} -> memory_grow({pages})",
+        addr = env.label(contract_addr)
+    );
+
+    unimplemented!()
 }
 
 pub fn msg_sender(mut env: FunctionEnvMut<Env>, sender_ptr: u32) {
     let (env, store) = env.data_and_store_mut();
-    let contract_addr = env.address();
-    println!("{contract_addr} -> msg_sender({sender_ptr})");
+    // let contract_addr = env.address();
+    // log::debug!("{addr} -> msg_sender({sender_ptr})", addr = env.label(contract_addr));
 
     let view = env.view(&store);
 
     let sender = env.sender();
-    println!("\t└ sender: {}", sender);
+    // log::debug!("\t└ sender: {}", sender);
 
     let bytes: [u8; 20] = sender.into();
 
@@ -139,13 +161,12 @@ pub fn msg_sender(mut env: FunctionEnvMut<Env>, sender_ptr: u32) {
 
 pub fn block_timestamp(mut env: FunctionEnvMut<Env>) -> u64 {
     let (env, _) = env.data_and_store_mut();
-    let contract_addr = env.address();
-
-    println!("{contract_addr} -> block_timestamp()");
+    // let contract_addr = env.address();
+    // log::debug!("{addr} -> block_timestamp()", addr = env.label(contract_addr));
 
     let block_timestamp = env.block_timestamp();
 
-    println!("\t└ block_timestamp: {block_timestamp}");
+    // log::debug!("\t└ block_timestamp: {block_timestamp}");
 
     block_timestamp
 }
@@ -175,7 +196,11 @@ pub fn call_contract(
     let data = read_bytes(&view, calldata_ptr, calldata_len);
 
     let str_data = hex::encode(&data);
-    println!("{contract_addr} -> call_contract({contract_addr}, Ox{str_data}, {value})");
+    log::debug!(
+        "{addr0} -> call_contract({addr1}, Ox{str_data}, {value})",
+        addr0 = env.label(env.address()),
+        addr1 = env.label(contract_addr)
+    );
 
     let provider = env.provider();
 
@@ -191,7 +216,7 @@ pub fn call_contract(
     let (status, data) = match res {
         Ok(data) => (0, data),
         Err(err) => {
-            println!("\t└ Error: {}", err);
+            log::debug!("\t└ Error: {}", err);
             (
                 1,
                 match err {
@@ -227,7 +252,11 @@ pub fn delegate_call_contract(
     let provider = env.provider();
 
     let str_data = hex::encode(&data);
-    println!("{contract_addr} -> delegate_call_contract({contract_addr}, Ox{str_data})");
+    log::debug!(
+        "{addr0} -> delegate_call_contract({addr1}, Ox{str_data})",
+        addr0 = env.label(env.address()),
+        addr1 = env.label(contract_addr)
+    );
 
     let contract = provider
         .contract(contract_addr)
@@ -240,7 +269,7 @@ pub fn delegate_call_contract(
     let (status, data) = match res {
         Ok(data) => (0, data),
         Err(err) => {
-            println!("\t└ Error: {}", err);
+            log::debug!("\t└ Error: {}", err);
             (
                 1,
                 match err {
@@ -276,7 +305,11 @@ pub fn static_call_contract(
     let provider = env.provider();
 
     let str_data = hex::encode(&data);
-    println!("{contract_addr} -> static_call_contract({contract_addr}, Ox{str_data})");
+    log::debug!(
+        "{addr0} -> static_call_contract({addr1}, Ox{str_data})",
+        addr0 = env.label(env.address()),
+        addr1 = env.label(contract_addr)
+    );
 
     let contract = provider
         .contract(contract_addr)
@@ -289,7 +322,7 @@ pub fn static_call_contract(
     let (status, data) = match res {
         Ok(data) => (0, data),
         Err(err) => {
-            println!("\t└ Error: {}", err);
+            log::debug!("\t└ Error: {}", err);
             (
                 1,
                 match err {
@@ -318,12 +351,15 @@ pub fn read_return_data(mut env: FunctionEnvMut<Env>, dest: u32, offset: u32, si
     let offset = offset as usize;
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> read_return_data({dest}, {offset}, {size})");
+    log::debug!(
+        "{addr} -> read_return_data({dest}, {offset}, {size})",
+        addr = env.label(contract_addr)
+    );
 
     let data = &data[offset..size];
     let data_str = hex::encode(data);
 
-    println!("\t└ data: 0x{}", data_str);
+    log::debug!("\t└ data: 0x{}", data_str);
 
     write_bytes(&view, dest as u64, data);
 
@@ -336,8 +372,8 @@ pub fn contract_address(mut env: FunctionEnvMut<Env>, dest: u32) {
     let view = env.view(&store);
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> contract_address({dest})");
-    println!("\t└ address: {contract_addr}");
+    // log::debug!("{addr} -> contract_address({dest})", addr = env.label(contract_addr));
+    // log::debug!("\t└ address: {addr}", addr = env.label(contract_addr));
 
     let bytes: [u8; 20] = contract_addr.into();
 
@@ -351,7 +387,7 @@ pub fn log_txt(mut env: FunctionEnvMut<Env>, data_ptr: u32, len: u32) {
     let msg = read_str(&view, data_ptr, len);
 
     let contract_addr = env.address();
-    println!("{contract_addr} -> log_txt({msg})");
+    log::debug!("{addr} -> log_txt({msg})", addr = env.label(contract_addr));
 }
 
 fn read_str(view: &MemoryView, data_ptr: u32, len: u32) -> String {
